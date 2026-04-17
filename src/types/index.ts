@@ -10,6 +10,8 @@ export interface Profile {
   role: 'admin' | 'user';
   created_at: string;
   is_approved: boolean;
+  is_bot?: boolean;
+  whatsapp_opt_in?: boolean;
 }
 
 export interface Announcement {
@@ -76,4 +78,44 @@ export interface Update {
   created_by: string;
   created_at: string;
   profiles?: { full_name: string };
+}
+
+export interface BotMessage {
+  id: string;
+  body: string;
+  authored_by: string | null;
+  created_at: string;
+}
+
+export type WhatsAppStatus =
+  | 'pending'
+  | 'sent'
+  | 'delivered'
+  | 'read'
+  | 'failed'
+  | 'skipped_no_phone'
+  | 'skipped_opt_out'
+  | 'skipped_disabled';
+
+export type VehicleType = 'car' | 'bike' | 'other';
+
+export interface Vehicle {
+  id: string;
+  user_id: string;
+  number: string;
+  type: VehicleType;
+  created_at: string;
+}
+
+export interface BotMessageRecipient {
+  id: string;
+  message_id: string;
+  user_id: string;
+  read_at: string | null;
+  whatsapp_status: WhatsAppStatus | null;
+  whatsapp_message_id: string | null;
+  whatsapp_error: string | null;
+  whatsapp_sent_at: string | null;
+  created_at: string;
+  bot_messages?: BotMessage;
 }

@@ -24,6 +24,10 @@
 .DS_Store
 *.pem
 
+# Original-source assets that live at the repo root for quick reference but
+# are NOT what the app serves (the app uses /public/community.webp).
+/community.png
+
 # debug
 npm-debug.log*
 yarn-debug.log*

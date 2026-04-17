@@ -2,6 +2,7 @@
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase';
 import Button from '@/components/ui/Button';
+import AuthShell from '@/components/layout/AuthShell';
 
 export default function PendingPage() {
   const router = useRouter();
@@ -13,8 +14,8 @@ export default function PendingPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-[#1B5E20] to-[#2E7D32] p-4">
-      <div className="w-full max-w-sm bg-white rounded-2xl p-8 shadow-2xl text-center">
+    <AuthShell>
+      <div className="w-full max-w-sm bg-white/95 backdrop-blur-sm rounded-2xl p-8 shadow-2xl text-center">
         <div className="w-20 h-20 rounded-full bg-amber-100 flex items-center justify-center mx-auto mb-4">
           <span className="text-4xl">⏳</span>
         </div>
@@ -35,6 +36,6 @@ export default function PendingPage() {
         </div>
         <Button variant="secondary" onClick={handleSignOut} className="w-full">Sign Out</Button>
       </div>
-    </div>
+    </AuthShell>
   );
 }

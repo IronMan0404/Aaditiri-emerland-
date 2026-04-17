@@ -91,6 +91,82 @@ git commit -m "Initial commit — Aaditri Emerland community app"
 
 5. **Deploy** → wait ~2 minutes. You get `https://aaditri-emerland-web.vercel.app`.
 
+### 2b-optional. MSG91 WhatsApp delivery (for the Bot Messages feature)
+
+The admin "Bot Messages" feature sends to every resident's in-app inbox by default. If you *also* want each message delivered to their WhatsApp, configure MSG91.
+
+**One-time setup on MSG91's side:**
+
+1. Sign up at https://msg91.com.
+2. Go to **WhatsApp** → connect a **WhatsApp Business number**. MSG91 walks you through Meta Business verification (1–3 days).
+3. In **WhatsApp → Templates**, create and submit one template named exactly `society_broadcast` (or whatever you set `MSG91_WHATSAPP_TEMPLATE_NAME` to):
+   - Category: **UTILITY**
+   - Language: **English (en)**
+   - Body:
+     ```
+     Hello {{1}},
+
+     A message from Aaditri Emerland management:
+
+     {{2}}
+
+     — Aaditri Bot
+     ```
+   - Meta usually approves utility templates within minutes.
+4. Copy your **Auth Key** from **Panel → API**.
+
+**Vercel env vars (server-side, do NOT prefix with `NEXT_PUBLIC_`):**
+
+| Variable | Example | Notes |
+|----------|---------|-------|
+| `MSG91_AUTH_KEY` | `464...xyz` | Secret. From MSG91 API panel. |
+| `MSG91_WHATSAPP_INTEGRATED_NUMBER` | `919999999999` | Digits only, E.164 without `+`. Your MSG91-connected WhatsApp Business number. |
+| `MSG91_WHATSAPP_TEMPLATE_NAME` | `society_broadcast` | Must match the approved template name exactly. |
+| `MSG91_WHATSAPP_LANGUAGE` *(optional)* | `en` | Default `en`. |
+| `MSG91_WHATSAPP_DEFAULT_COUNTRY_CODE` *(optional)* | `91` | Prepended to 10-digit phone numbers stored without a country code. Default `91` (India). |
+
+**If these are missing the feature safely degrades**: the admin can still send bot messages, they just land in the in-app inbox only. Each recipient row gets `whatsapp_status = 'skipped_disabled'` so you can see at a glance that WhatsApp was off.
+
+**Resident opt-in**: every resident has a `whatsapp_opt_in` toggle on their Profile page (defaults ON). If they switch it off, they stop receiving WhatsApp copies but still see messages in the in-app inbox. Each skipped row is recorded as `skipped_opt_out`.
+
+**Cost awareness**: MSG91 WhatsApp utility templates in India are ~₹0.10–0.40 per message at typical volumes. A full-community broadcast to 100 residents is therefore ~₹10–40.
+
+### 2c-optional. Calendar-invite emails via Brevo
+
+The app can email every resident a calendar invite when:
+
+- an **admin creates an event** → all approved residents receive an `.ics` attachment + "Add to Google / Add to Outlook" web-link buttons.
+- an **admin approves a booking** → just the booker receives the same kind of invite for their slot.
+
+If this isn't configured, event/booking creation still works — the invite emails are silently skipped (the API route returns `{ skipped: true, reason: 'Email provider not configured' }`).
+
+**One-time setup (Brevo free tier: 300 emails/day, no domain required):**
+
+1. Sign up at https://www.brevo.com → choose the **Free** plan (no card).
+2. Dashboard → **Settings** → **SMTP & API** → **API Keys** → **Generate a new API key**. Keys start with `xkeysib-`.
+3. Dashboard → **Senders & IP** → **Senders** → **Add a sender**. Use your personal Gmail (or any email you control). Brevo sends a verification email — click the link. Without this step, the API will reject sends because Brevo requires the sender to be a verified address.
+4. *(Optional, for production)* Go to **Senders & IP** → **Domains** → add your domain and follow their DNS steps. Emails will then look like `noreply@your-domain.com` instead of `yourname@gmail.com`. Not required for the free tier to work.
+
+**Vercel env vars (server-side only; no `NEXT_PUBLIC_` prefix):**
+
+| Variable | Example | Notes |
+|----------|---------|-------|
+| `BREVO_API_KEY` | `xkeysib-abcd...` | Secret. From Brevo API Keys dashboard. |
+| `EMAIL_FROM_ADDRESS` | `yourname@gmail.com` | Must be a verified sender in Brevo. Otherwise sends fail. |
+| `EMAIL_FROM_NAME` *(optional)* | `Aaditri Emerland Community` | Display name on the From line. Default: `Aaditri Emerland Community`. |
+
+**Verify the configuration without sending anything:**
+
+While the dev server is running, hit `/api/_debug/email-status` as an admin. It returns `{ configured: true, from: "Aaditri Emerland Community <you@gmail.com>", keyFingerprint: "xkey…12", hints: {...} }` without leaking the key itself. `configured: false` means the env vars didn't load — restart `npm run dev` after any `.env.local` change.
+
+**Calendar-invite behaviour notes:**
+
+- Events store `date` + free-text `time` (e.g. `"10:00 AM"` or `"18:30"`). We parse the time, assume **IST** (Asia/Kolkata), and default the event duration to 2 hours. If parsing fails the email still goes out — just without an attached `.ics`.
+- Bookings' `time_slot` is parsed as "start - end" (e.g. `"6:00 PM - 8:00 PM"`).
+- Each invite includes an `.ics` attachment *and* deep-link buttons to Google Calendar / Outlook Web so the user can one-click from any device.
+- Nothing per-user opts in or out yet — if a resident has an email in their profile, they receive event invites. If you need an opt-out toggle, ask and I'll add one (mirrors the WhatsApp opt-in toggle already on the Profile page).
+- **Free-tier limit: 300 emails/day.** A broadcast to 100 residents is 100 emails. Event creation can therefore burn through the quota fast if you have >3 big announcements in a day. Brevo's paid tier ($9/month) lifts this to 20k/month.
+
 ### 2c. Update Supabase Auth URLs
 
 Go back to Supabase → Authentication → URL Configuration:

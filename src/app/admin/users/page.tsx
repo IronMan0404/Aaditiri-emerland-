@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
-import { Shield, ShieldOff, CheckCircle, Search, X, Pencil, AlertTriangle } from 'lucide-react';
+import { Shield, ShieldOff, CheckCircle, Search, X, Pencil, AlertTriangle, Bot, Car } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { createClient } from '@/lib/supabase';
 import { useAuth } from '@/hooks/useAuth';
@@ -9,6 +9,7 @@ import type { Profile } from '@/types';
 import Modal from '@/components/ui/Modal';
 import Button from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
+import VehiclesEditor, { type VehicleDraft } from '@/components/ui/VehiclesEditor';
 
 type ResidentFilter = 'owner' | 'tenant' | 'unspecified';
 const FILTER_OPTIONS: { id: ResidentFilter; label: string; emoji: string }[] = [
@@ -21,14 +22,14 @@ interface EditForm {
   full_name: string;
   phone: string;
   flat_number: string;
-  vehicle_number: string;
   resident_type: '' | 'owner' | 'tenant';
   role: 'admin' | 'user';
   is_approved: boolean;
+  is_bot: boolean;
 }
 
 function emptyForm(): EditForm {
-  return { full_name: '', phone: '', flat_number: '', vehicle_number: '', resident_type: '', role: 'user', is_approved: false };
+  return { full_name: '', phone: '', flat_number: '', resident_type: '', role: 'user', is_approved: false, is_bot: false };
 }
 
 function profileToForm(u: Profile): EditForm {
@@ -36,10 +37,10 @@ function profileToForm(u: Profile): EditForm {
     full_name: u.full_name ?? '',
     phone: u.phone ?? '',
     flat_number: u.flat_number ?? '',
-    vehicle_number: u.vehicle_number ?? '',
     resident_type: (u.resident_type ?? '') as EditForm['resident_type'],
     role: u.role,
     is_approved: u.is_approved,
+    is_bot: Boolean(u.is_bot),
   };
 }
 
@@ -53,15 +54,29 @@ export default function AdminUsersPage() {
 
   const [editing, setEditing] = useState<Profile | null>(null);
   const [editForm, setEditForm] = useState<EditForm>(emptyForm());
+  const [editVehicles, setEditVehicles] = useState<VehicleDraft[]>([]);
   const [confirmSelfDemote, setConfirmSelfDemote] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [vehiclesByUser, setVehiclesByUser] = useState<Record<string, VehicleDraft[]>>({});
 
   const supabase = createClient();
 
   const fetchUsers = async () => {
-    const { data, error } = await supabase.from('profiles').select('*').order('is_approved').order('created_at', { ascending: false });
+    const [{ data: profilesData, error }, { data: vehiclesData }] = await Promise.all([
+      supabase.from('profiles').select('*').order('is_approved').order('created_at', { ascending: false }),
+      supabase.from('vehicles').select('id, user_id, number, type').order('created_at'),
+    ]);
     if (error) toast.error(error.message);
-    if (data) setUsers(data);
+    if (profilesData) setUsers(profilesData);
+    if (vehiclesData) {
+      const grouped: Record<string, VehicleDraft[]> = {};
+      for (const v of vehiclesData) {
+        const uid = (v as { user_id: string }).user_id;
+        if (!grouped[uid]) grouped[uid] = [];
+        grouped[uid].push({ id: (v as { id: string }).id, number: (v as { number: string }).number, type: (v as { type: VehicleDraft['type'] }).type });
+      }
+      setVehiclesByUser(grouped);
+    }
     setLoading(false);
   };
   useEffect(() => { fetchUsers(); }, []);
@@ -86,14 +101,15 @@ export default function AdminUsersPage() {
         if (!residentFilter.has(bucket)) return false;
       }
       if (!q) return true;
+      const platesText = (vehiclesByUser[u.id] ?? []).map((v) => v.number).join(' ').toLowerCase();
       return (
         u.full_name?.toLowerCase().includes(q) ||
         u.email?.toLowerCase().includes(q) ||
         (u.flat_number ?? '').toLowerCase().includes(q) ||
-        (u.vehicle_number ?? '').toLowerCase().includes(q)
+        platesText.includes(q)
       );
     });
-  }, [users, pending, tab, residentFilter, search]);
+  }, [users, pending, tab, residentFilter, search, vehiclesByUser]);
 
   function toggleResidentFilter(id: ResidentFilter) {
     setResidentFilter((prev) => {
@@ -113,10 +129,12 @@ export default function AdminUsersPage() {
   function openEdit(user: Profile) {
     setEditing(user);
     setEditForm(profileToForm(user));
+    setEditVehicles(vehiclesByUser[user.id] ?? []);
     setConfirmSelfDemote(false);
   }
   function closeEdit() {
     setEditing(null);
+    setEditVehicles([]);
     setConfirmSelfDemote(false);
   }
 
@@ -164,14 +182,30 @@ export default function AdminUsersPage() {
     if (!editForm.full_name.trim()) { toast.error('Name is required'); return; }
     if (blockSelfDemote) { toast.error('Confirm the self-demotion checkbox first'); return; }
     setSaving(true);
+
+    // Enforce single-bot: if we're tagging this user as the bot, clear is_bot on
+    // every other row first so there's only ever one "Aaditri Bot" at a time.
+    if (editForm.is_bot && !editing.is_bot) {
+      const { error: clearError } = await supabase
+        .from('profiles')
+        .update({ is_bot: false })
+        .eq('is_bot', true)
+        .neq('id', editing.id);
+      if (clearError) {
+        setSaving(false);
+        toast.error(`Couldn't clear existing bot: ${clearError.message}`);
+        return;
+      }
+    }
+
     const payload = {
       full_name: editForm.full_name.trim(),
       phone: editForm.phone.trim() || null,
       flat_number: editForm.flat_number.trim() || null,
-      vehicle_number: editForm.vehicle_number.trim() || null,
       resident_type: editForm.resident_type === '' ? null : editForm.resident_type,
       role: editForm.role,
       is_approved: editForm.is_approved,
+      is_bot: editForm.is_bot,
     };
     const { error } = await supabase.from('profiles').update(payload).eq('id', editing.id);
     setSaving(false);
@@ -287,6 +321,7 @@ export default function AdminUsersPage() {
                       <span className="font-semibold text-sm text-gray-900 truncate">{u.full_name}</span>
                       {isSelf && <span className="text-[10px] font-bold bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">YOU</span>}
                       {u.role === 'admin' && <span className="text-[10px] font-bold bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full">ADMIN</span>}
+                      {u.is_bot && <span className="inline-flex items-center gap-0.5 text-[10px] font-bold bg-[#1B5E20] text-white px-2 py-0.5 rounded-full"><Bot size={10} />BOT</span>}
                       {u.resident_type ? (
                         <button
                           type="button"
@@ -322,7 +357,12 @@ export default function AdminUsersPage() {
                       </span>
                     </div>
                     <p className="text-xs text-gray-400 truncate">{u.email}{u.flat_number ? ` · Flat ${u.flat_number}` : ''}</p>
-                    {u.vehicle_number && <p className="text-xs text-gray-400">Vehicle: {u.vehicle_number}</p>}
+                    {(vehiclesByUser[u.id]?.length ?? 0) > 0 && (
+                      <p className="text-xs text-gray-400 truncate flex items-center gap-1">
+                        <Car size={11} className="text-[#1B5E20] shrink-0" />
+                        <span className="font-mono tracking-wide">{vehiclesByUser[u.id]!.map((v) => v.number).join(', ')}</span>
+                      </p>
+                    )}
                     <p className="text-xs text-gray-300">Joined {format(new Date(u.created_at), 'dd MMM yyyy')}</p>
                   </div>
                   <div className="flex flex-col gap-1 items-end flex-shrink-0">
@@ -376,7 +416,20 @@ export default function AdminUsersPage() {
             <Input label="Email" value={editing.email} disabled placeholder="(read-only)" />
             <Input label="Phone" value={editForm.phone} onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })} placeholder="+91 98765 43210" />
             <Input label="Flat Number" value={editForm.flat_number} onChange={(e) => setEditForm({ ...editForm, flat_number: e.target.value })} placeholder="A-101" />
-            <Input label="Vehicle Number" value={editForm.vehicle_number} onChange={(e) => setEditForm({ ...editForm, vehicle_number: e.target.value })} placeholder="TS09AB1234" />
+            <div>
+              <label className="text-sm font-medium text-gray-700 block mb-1.5 flex items-center gap-1.5">
+                <Car size={14} className="text-[#1B5E20]" />Vehicles
+                <span className="ml-auto text-[10px] font-bold bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">{editVehicles.length}</span>
+              </label>
+              <VehiclesEditor
+                vehicles={editVehicles}
+                onChange={(next) => {
+                  setEditVehicles(next);
+                  setVehiclesByUser((prev) => ({ ...prev, [editing.id]: next }));
+                }}
+                userId={editing.id}
+              />
+            </div>
 
             {/* Resident Type */}
             <div>
@@ -430,6 +483,25 @@ export default function AdminUsersPage() {
                 checked={editForm.is_approved}
                 onChange={(e) => setEditForm({ ...editForm, is_approved: e.target.checked })}
                 className="h-4 w-4 accent-[#1B5E20]"
+              />
+            </label>
+
+            {/* Aaditri Bot */}
+            <label className={`flex items-start justify-between gap-3 px-3 py-2.5 rounded-xl border ${editForm.is_bot ? 'bg-green-50 border-[#1B5E20]/30' : 'bg-gray-50 border-transparent'}`}>
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5 text-sm font-medium text-gray-800">
+                  <Bot size={14} className="text-[#1B5E20]" />
+                  Tag as Aaditri Bot
+                </div>
+                <p className="text-xs text-gray-500 mt-0.5 leading-snug">
+                  Messages sent from the admin bot page will be posted as this user. Only one bot is allowed — tagging this user will <strong>untag any other bot</strong>.
+                </p>
+              </div>
+              <input
+                type="checkbox"
+                checked={editForm.is_bot}
+                onChange={(e) => setEditForm({ ...editForm, is_bot: e.target.checked })}
+                className="h-4 w-4 accent-[#1B5E20] mt-1"
               />
             </label>
 
