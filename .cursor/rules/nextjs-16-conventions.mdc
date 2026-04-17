@@ -1,0 +1,44 @@
+---
+description: Next.js 16 conventions — proxy.ts, async layouts, Turbopack
+alwaysApply: true
+---
+
+# Next.js 16 Conventions (this repo)
+
+This is Next 16.2.4 + Turbopack. Older patterns are traps.
+
+## `src/proxy.ts`, NOT `src/middleware.ts`
+
+`middleware.ts` is deprecated in Next 16. Use `src/proxy.ts` exporting a `proxy` function:
+
+```ts
+// src/proxy.ts
+export async function proxy(request: NextRequest) { /* ... */ }
+export const config = { matcher: ['/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)'] };
+```
+
+## Never make auth-gating layouts async
+
+`src/app/admin/layout.tsx` and `src/app/dashboard/layout.tsx` MUST be synchronous Server Components. No `async`, no `await`, no `redirect()`.
+
+Async Server Component layouts that call `redirect()` during render crash Turbopack's dev tracer:
+> `Failed to execute 'measure' on 'Performance': '​AdminLayout' cannot have a negative time stamp.`
+
+All auth and role gating lives in `src/proxy.ts` instead.
+
+### ❌ BAD
+```tsx
+export default async function AdminLayout({ children }) {
+  const supabase = await createServerSupabaseClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect('/auth/login');
+  return <div>{children}</div>;
+}
+```
+
+### ✅ GOOD
+```tsx
+export default function AdminLayout({ children }: { children: React.ReactNode }) {
+  return <div>{children}</div>;
+}
+```

@@ -1,0 +1,123 @@
+name: Deploy to Vercel
+
+# Optional explicit deploy pipeline using the Vercel CLI.
+#
+# By default Vercel's native Git integration handles deploys when you connect
+# the repo in the Vercel dashboard. Leave this workflow alone in that case —
+# it's inert without the secrets below.
+#
+# To use this instead of (or in addition to) the Git integration, set these
+# repository secrets:
+#   - VERCEL_TOKEN       (https://vercel.com/account/tokens)
+#   - VERCEL_ORG_ID      (from `.vercel/project.json` after `vercel link`)
+#   - VERCEL_PROJECT_ID  (from `.vercel/project.json` after `vercel link`)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: vercel-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check-secrets:
+    name: Check for Vercel secrets
+    runs-on: ubuntu-latest
+    outputs:
+      has_secrets: ${{ steps.check.outputs.has_secrets }}
+    steps:
+      - id: check
+        env:
+          HAS_TOKEN: ${{ secrets.VERCEL_TOKEN != '' }}
+          HAS_ORG: ${{ secrets.VERCEL_ORG_ID != '' }}
+          HAS_PROJECT: ${{ secrets.VERCEL_PROJECT_ID != '' }}
+        run: |
+          if [[ "$HAS_TOKEN" == "true" && "$HAS_ORG" == "true" && "$HAS_PROJECT" == "true" ]]; then
+            echo "has_secrets=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_secrets=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Vercel secrets not configured. Skipping CLI deploy. Vercel's Git integration will deploy instead if connected."
+          fi
+
+  deploy-preview:
+    name: Preview Deploy
+    needs: check-secrets
+    if: needs.check-secrets.outputs.has_secrets == 'true' && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install Vercel CLI
+        run: npm install --global vercel@latest
+
+      - name: Pull Vercel env (preview)
+        run: vercel pull --yes --environment=preview --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Build project
+        run: vercel build --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Deploy preview to Vercel
+        id: deploy
+        run: |
+          url=$(vercel deploy --prebuilt --token=${{ secrets.VERCEL_TOKEN }})
+          echo "preview_url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Comment preview URL on PR
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: vercel-preview
+          message: |
+            **Preview deploy**: ${{ steps.deploy.outputs.preview_url }}
+
+            (commit `${{ github.sha }}`)
+
+  deploy-production:
+    name: Production Deploy
+    needs: check-secrets
+    if: needs.check-secrets.outputs.has_secrets == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: production
+      url: ${{ steps.deploy.outputs.prod_url }}
+    env:
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install Vercel CLI
+        run: npm install --global vercel@latest
+
+      - name: Pull Vercel env (production)
+        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Build project
+        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Deploy to production
+        id: deploy
+        run: |
+          url=$(vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }})
+          echo "prod_url=$url" >> "$GITHUB_OUTPUT"

@@ -1,0 +1,33 @@
+---
+description: Aaditri Emerland — project overview and tech stack (always apply)
+alwaysApply: true
+---
+
+# Aaditri Emerland Community App
+
+Mobile-first PWA for residents of Aaditri Emerland. See `AGENTS.md` for the full rulebook.
+
+## Tech Stack
+
+- **Next.js `16.2.4`** (App Router, Turbopack dev)
+- **React `19.2.4`** + **TypeScript `^5`**
+- **Tailwind CSS `^4`**
+- **Supabase** (`@supabase/ssr`, `@supabase/supabase-js`) — Auth, Postgres, Storage, RLS
+- **next-pwa** + `public/manifest.json`
+- **lucide-react**, **react-hot-toast**, **date-fns**
+- Hosted on **Vercel**
+
+## Key Files
+
+- `src/proxy.ts` — auth + role gating (runs before every request on `/dashboard/*` and `/admin/*`)
+- `src/lib/supabase.ts` — browser client factory
+- `src/lib/supabase-server.ts` — Server Component client factory
+- `src/hooks/useAuth.ts` — client-side auth + profile hook with a `mounted` flag
+- `src/types/index.ts` — shared types (`Profile`, `Announcement`, `Event`, `Booking`, …)
+- `supabase/schema.sql` — tables, RLS policies, storage buckets
+
+## Brand
+
+- Primary color `#1B5E20` (dark green)
+- Accent `#FFD700` (gold)
+- Background `#F5F5F5`

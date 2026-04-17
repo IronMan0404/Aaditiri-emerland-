@@ -1,0 +1,44 @@
+---
+description: Avoid SSR/client hydration mismatches in client components
+globs: src/**/*.tsx
+alwaysApply: false
+---
+
+# Hydration Safety
+
+Any `'use client'` component that renders values depending on `useAuth()`, `Date`, `window`, browser locale, `Math.random()`, etc. must match between SSR and the first client render.
+
+## Use the `mounted` flag
+
+`useAuth()` exposes `mounted`, which is `false` on SSR + first client render, then `true` after `useEffect` runs.
+
+### ✅ GOOD
+```tsx
+const { profile, isAdmin, mounted } = useAuth();
+return (
+  <h1>{mounted ? (profile?.full_name ?? 'Resident') : 'Resident'}</h1>
+);
+```
+
+### ❌ BAD
+```tsx
+const [greeting] = useState(() => {
+  const h = new Date().getHours();
+  return h < 12 ? 'Good Morning' : 'Good Evening';
+});
+return <p>{greeting}</p>;
+```
+
+Compute time-dependent values inside `useEffect` and keep the initial state stable:
+
+```tsx
+const [greeting, setGreeting] = useState('Welcome');
+useEffect(() => {
+  const h = new Date().getHours();
+  setGreeting(h < 12 ? 'Good Morning' : h < 17 ? 'Good Afternoon' : 'Good Evening');
+}, []);
+```
+
+## When a single element legitimately differs
+
+Add `suppressHydrationWarning` on that specific element — never on the `<body>` or a large wrapper.
