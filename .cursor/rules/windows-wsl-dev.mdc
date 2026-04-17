@@ -1,0 +1,47 @@
+---
+description: Windows + WSL dev-server conflict triage for Turbopack cache errors
+alwaysApply: true
+---
+
+# Windows + WSL Dev Conflict
+
+This repo lives at `C:\work\aaditri-emerland-web`. **Never run `next dev` from WSL against `/mnt/c/...`**. WSL + Windows writing to the same `.next` directory corrupts Turbopack's chunk manifest.
+
+## Symptoms of a WSL `next dev` stowaway
+
+- `Cannot find module '../chunks/ssr/[turbopack]_runtime.js'`
+- `Another next dev server is already running` on port 3000 (but no Windows node process is visible)
+- Hydration mismatches showing stale code that doesn't exist in the current file
+- `.next` refuses to delete with `directory is not empty`
+
+## Diagnosis
+
+```powershell
+wsl -d Ubuntu -u root -- ps -ef | Select-String next
+```
+
+If that returns any `next-server` or `node .../next dev` process, that's the culprit.
+
+## Recovery
+
+```powershell
+# kill stray WSL dev server
+wsl -d Ubuntu -u root -- sh -c "pkill -9 -f 'next' ; pkill -9 -f 'node.*next' ; true"
+
+# kill Windows-side Next processes
+Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" |
+  Where-Object { $_.CommandLine -like '*next*' -or $_.CommandLine -like '*npm*run*dev*' } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+
+# wipe Turbopack cache
+Remove-Item -Recurse -Force .next
+
+# restart on Windows only
+npm run dev
+```
+
+## Prevention
+
+Pick one dev environment and stick to it:
+- **Windows native** (recommended): PowerShell / CMD / Cursor terminal on `C:\work\...`
+- **WSL native**: `git clone` into `~/code/...` inside WSL, develop there

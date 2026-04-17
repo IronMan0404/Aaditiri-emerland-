@@ -1,0 +1,38 @@
+---
+description: Supabase client factories, RLS, and env var conventions
+globs: src/**/*.{ts,tsx}
+alwaysApply: false
+---
+
+# Supabase Usage
+
+## Pick the right client factory
+
+| Context | Import |
+|---------|--------|
+| `'use client'` component | `import { createClient } from '@/lib/supabase'` |
+| Server Component / Route Handler | `import { createServerSupabaseClient } from '@/lib/supabase-server'` |
+| `src/proxy.ts` | uses `createServerClient` from `@supabase/ssr` with a NextRequest cookie adapter (already wired) |
+
+## Env vars (fallback order)
+
+Supabase key is read as: `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` first, then `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
+
+```ts
+const key =
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ??
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+```
+
+Support both schemes in any new server-side code.
+
+## NEVER use the service-role key
+
+This app does NOT use `SUPABASE_SERVICE_ROLE_KEY`. All access is controlled by **Row Level Security** in `supabase/schema.sql`. If you think you need the service role, you almost certainly need a new RLS policy instead.
+
+## Schema changes
+
+When adding/modifying tables:
+1. Update `supabase/schema.sql` (table + RLS policies + storage buckets if needed).
+2. Update the matching TypeScript type in `src/types/index.ts`.
+3. Document the migration SQL the user has to run in Supabase SQL Editor.
