@@ -1,6 +1,6 @@
 import { createServerSupabaseClient } from '@/lib/supabase-server';
 import Link from 'next/link';
-import { Users, Megaphone, Calendar, Bookmark, Images, Radio, Newspaper, Shield } from 'lucide-react';
+import { Users, Megaphone, Calendar, Bookmark, Images, Radio, Newspaper, Shield, Bot } from 'lucide-react';
 
 async function getStats() {
   const supabase = await createServerSupabaseClient();
@@ -35,6 +35,7 @@ export default async function AdminDashboard() {
 
   const quickActions = [
     { label: 'Manage Users', icon: Users, href: '/admin/users', desc: 'View & manage residents' },
+    { label: 'Bot Messages', icon: Bot, href: '/admin/messages', desc: 'Send as Aaditri Bot' },
     { label: 'Community Updates', icon: Newspaper, href: '/admin/updates', desc: 'Post community updates' },
     { label: 'Review Bookings', icon: Bookmark, href: '/dashboard/bookings', desc: 'Approve/reject bookings' },
     { label: 'Post Announcement', icon: Megaphone, href: '/dashboard/announcements', desc: 'Notify all residents' },

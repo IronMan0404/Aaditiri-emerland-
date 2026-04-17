@@ -42,59 +42,87 @@ src/
 ├── app/
 │   ├── admin/              # Admin-only section (protected by proxy.ts)
 │   │   ├── gallery/
+│   │   ├── messages/       # NEW: send Aaditri Bot messages to all residents
 │   │   ├── updates/
-│   │   ├── users/
-│   │   ├── layout.tsx      # sync server component (no awaits)
-│   │   └── page.tsx        # admin dashboard with stats
+│   │   ├── users/          # tag users as bot, edit vehicles, approve
+│   │   ├── layout.tsx
+│   │   └── page.tsx
+│   ├── api/                # NEW: server-only API routes
+│   │   ├── _debug/
+│   │   │   └── email-status/    # admin-only email-config sanity check
+│   │   └── admin/
+│   │       ├── bookings/[id]/approve/   # approves + emails .ics invite
+│   │       ├── events/invite/           # broadcasts event invite to all
+│   │       └── messages/send/           # bot-message fan-out (+ WhatsApp)
 │   ├── auth/
 │   │   ├── admin-login/
 │   │   ├── login/
-│   │   ├── pending/        # shown to unapproved users
+│   │   ├── pending/
 │   │   └── register/
-│   ├── dashboard/          # Resident section (protected by proxy.ts)
+│   ├── dashboard/
 │   │   ├── announcements/
-│   │   ├── bookings/
+│   │   ├── bookings/       # admin can revoke/reject approved bookings now
 │   │   ├── broadcasts/
-│   │   ├── events/
+│   │   ├── events/         # native date/time picker; auto-emails invites
 │   │   ├── gallery/
-│   │   ├── profile/
-│   │   ├── layout.tsx      # sync server component
-│   │   └── page.tsx
+│   │   ├── messages/       # NEW: per-user bot-message inbox
+│   │   ├── profile/        # vehicles editor, WhatsApp opt-in
+│   │   ├── layout.tsx
+│   │   └── page.tsx        # community-photo hero
 │   ├── globals.css
-│   ├── layout.tsx          # root layout + PWA metadata + Toaster
-│   └── page.tsx            # root → redirects to /dashboard or /auth/login
+│   ├── layout.tsx
+│   └── page.tsx
 ├── components/
-│   ├── layout/             # Sidebar, TopBar, MobileNav ('use client')
-│   └── ui/                 # Button, Input, Modal
+│   ├── layout/             # Sidebar, TopBar, MobileNav, AuthShell (NEW)
+│   └── ui/                 # Button, Input, Modal, VehiclesEditor (NEW)
 ├── hooks/
-│   └── useAuth.ts          # client-side auth + profile hook
+│   └── useAuth.ts
 ├── lib/
-│   ├── supabase.ts         # browser client factory
-│   └── supabase-server.ts  # server component client factory
+│   ├── email.ts            # NEW: Brevo transactional sender
+│   ├── ics.ts              # NEW: RFC 5545 calendar-invite builder
+│   ├── msg91.ts            # NEW: WhatsApp template sender (server-only)
+│   ├── supabase.ts
+│   └── supabase-server.ts
 ├── types/
-│   └── index.ts            # Profile, Announcement, Event, Booking, ...
-└── proxy.ts                # auth + role gating (was middleware.ts)
+│   └── index.ts
+└── proxy.ts
 
 public/
-├── manifest.json           # PWA manifest
-└── icon-192.png, icon-512.png  (to be added)
+├── community.webp          # NEW: community photo used by dashboard hero + auth screens
+├── manifest.json
+└── icon-192.png, icon-512.png
 
 supabase/
-└── schema.sql              # tables, RLS policies, storage buckets
+└── schema.sql              # tables (incl. bot_messages, vehicles), RLS, storage buckets
+
+docs/                       # NEW per-feature documentation
+├── BOT_MESSAGES.md
+├── VEHICLES.md
+├── CALENDAR_INVITES.md
+├── BREVO_EMAIL.md
+├── MSG91_WHATSAPP.md
+└── ADMIN_BOOKING_REVOKE.md
 ```
 
 ## Features
 
-- **Auth**: email/password via Supabase, with an approval queue (`is_approved` flag on profile) and a separate admin login.
-- **Role-based access**: `admin` vs `user`. All gating happens in `src/proxy.ts` (runs before page render).
-- **Announcements** (admin posts, pinned support)
-- **Events** with RSVPs
-- **Facility bookings** (Clubhouse, Pool, Tennis, Badminton, Gym, Party Hall, Conference Room) with admin approval flow
-- **Broadcasts** (admin-only community-wide messages)
-- **Photo gallery** (any resident can upload)
-- **Profile management** (name, flat number, vehicle, phone, avatar)
-- **Admin panel**: stats dashboard, user management, updates, gallery moderation
-- **PWA**: installable, brand-themed, offline-ready shell
+### Core (always on)
+- **Auth** with approval queue and a separate admin login.
+- **Role-based access** enforced in `src/proxy.ts` (runs before every request).
+- **Announcements** (admin posts, pinned support).
+- **Events** with RSVPs and a native date/time picker.
+- **Facility bookings** with a full lifecycle: pending → approved → revoked/rejected (with required reason; resident is auto-notified via the bot inbox).
+- **Broadcasts** (admin-only community-wide messages).
+- **Photo gallery** (any resident can upload).
+- **Profile**: name, flat, phone, avatar, **multiple vehicles**, WhatsApp opt-in toggle.
+- **Admin Bot Messages**: send a message as "Aaditri Bot" to every approved resident, with per-user read receipts and an inbox at `/dashboard/messages`.
+- **Multiple vehicles per resident**: dedicated `vehicles` table; admin and resident can add/remove with a per-vehicle type (car/bike/other).
+- **Visual identity**: community photo used as a hero on the dashboard and as a background on every auth page.
+- **PWA**: installable, brand-themed, offline-ready shell.
+
+### Optional integrations (graceful-degrade if not configured)
+- **Email** via [Brevo](./docs/BREVO_EMAIL.md) — sends `.ics` calendar invites when an admin creates an event or approves a booking. Free tier covers 300 emails/day.
+- **WhatsApp** via [MSG91](./docs/MSG91_WHATSAPP.md) — bot messages also go out as WhatsApp template messages. Per-resident opt-in.
 
 ## Getting Started
 

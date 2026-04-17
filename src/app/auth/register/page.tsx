@@ -6,13 +6,16 @@ import toast from 'react-hot-toast';
 import { createClient } from '@/lib/supabase';
 import Button from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
+import AuthShell from '@/components/layout/AuthShell';
+import VehiclesEditor, { type VehicleDraft } from '@/components/ui/VehiclesEditor';
 
 export default function RegisterPage() {
   const [form, setForm] = useState({
     fullName: '', email: '', phone: '', flatNumber: '',
-    vehicleNumber: '', residentType: '' as '' | 'owner' | 'tenant',
+    residentType: '' as '' | 'owner' | 'tenant',
     password: '', confirmPassword: '',
   });
+  const [vehicles, setVehicles] = useState<VehicleDraft[]>([]);
   const [loading, setLoading] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const router = useRouter();
@@ -51,11 +54,20 @@ export default function RegisterPage() {
         full_name: form.fullName,
         phone: form.phone,
         flat_number: form.flatNumber,
-        vehicle_number: form.vehicleNumber,
         resident_type: form.residentType,
         role: 'user',
         is_approved: false,
       });
+      // Persist any vehicles the user added in the form. Failures here are
+      // non-fatal — the account exists and the resident can add vehicles
+      // later from their profile page.
+      if (vehicles.length > 0) {
+        const rows = vehicles.map((v) => ({ user_id: data.user!.id, number: v.number, type: v.type }));
+        const { error: vehiclesError } = await supabase.from('vehicles').insert(rows);
+        if (vehiclesError) {
+          toast.error(`Account created, but couldn't save vehicles: ${vehiclesError.message}`);
+        }
+      }
       setSubmitted(true);
     }
     setLoading(false);
@@ -63,8 +75,8 @@ export default function RegisterPage() {
 
   if (submitted) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-[#1B5E20] to-[#2E7D32] p-4">
-        <div className="w-full max-w-sm bg-white rounded-2xl p-8 shadow-2xl text-center">
+      <AuthShell>
+        <div className="w-full max-w-sm bg-white/95 backdrop-blur-sm rounded-2xl p-8 shadow-2xl text-center">
           <div className="w-16 h-16 rounded-full bg-amber-100 flex items-center justify-center mx-auto mb-4">
             <span className="text-3xl">⏳</span>
           </div>
@@ -73,22 +85,22 @@ export default function RegisterPage() {
             Check your email to verify your address.
           </p>
           <p className="text-gray-500 text-sm mb-6">
-            Your account is <strong>pending admin approval</strong>. You'll be able to sign in once an admin reviews your registration.
+            Your account is <strong>pending admin approval</strong>. You&apos;ll be able to sign in once an admin reviews your registration.
           </p>
           <Button onClick={() => router.push('/auth/login')} className="w-full">Go to Login</Button>
         </div>
-      </div>
+      </AuthShell>
     );
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-[#1B5E20] to-[#2E7D32] p-4">
+    <AuthShell>
       <div className="w-full max-w-sm">
         <div className="text-center mb-6">
-          <div className="w-16 h-16 rounded-2xl bg-white/20 flex items-center justify-center text-white font-bold text-2xl mx-auto mb-3">AE</div>
-          <h1 className="text-xl font-bold text-white">Join Aaditri Emerland</h1>
+          <div className="w-16 h-16 rounded-2xl bg-white/25 backdrop-blur-sm flex items-center justify-center text-white font-bold text-2xl mx-auto mb-3 border border-white/30 shadow-lg">AE</div>
+          <h1 className="text-xl font-bold text-white drop-shadow-sm">Join Aaditri Emerland</h1>
         </div>
-        <div className="bg-white rounded-2xl p-6 shadow-2xl">
+        <div className="bg-white/95 backdrop-blur-sm rounded-2xl p-6 shadow-2xl">
           <h2 className="text-xl font-bold text-gray-900 mb-5">Create Account</h2>
           <form onSubmit={handleRegister} className="space-y-3">
             <Input label="Full Name *" value={form.fullName} onChange={(e) => update('fullName', e.target.value)} placeholder="John Smith" />
@@ -116,7 +128,12 @@ export default function RegisterPage() {
 
             <Input label="Email *" type="email" value={form.email} onChange={(e) => update('email', e.target.value)} placeholder="you@example.com" />
             <Input label="Phone Number" type="tel" value={form.phone} onChange={(e) => update('phone', e.target.value)} placeholder="+91 98765 43210" />
-            <Input label="Vehicle Number" value={form.vehicleNumber} onChange={(e) => update('vehicleNumber', e.target.value)} placeholder="TS09AB1234 (optional)" />
+
+            <div>
+              <label className="text-sm font-medium text-gray-700 block mb-1.5">Vehicles (optional)</label>
+              <VehiclesEditor vehicles={vehicles} onChange={setVehicles} />
+            </div>
+
             <Input label="Password *" type="password" value={form.password} onChange={(e) => update('password', e.target.value)} placeholder="Min. 6 characters" />
             <Input label="Confirm Password *" type="password" value={form.confirmPassword} onChange={(e) => update('confirmPassword', e.target.value)} placeholder="Repeat password" />
             <Button type="submit" loading={loading} className="w-full">Create Account</Button>
@@ -126,6 +143,6 @@ export default function RegisterPage() {
           </p>
         </div>
       </div>
-    </div>
+    </AuthShell>
   );
 }

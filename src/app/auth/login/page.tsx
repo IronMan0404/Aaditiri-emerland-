@@ -6,6 +6,7 @@ import toast from 'react-hot-toast';
 import { createClient } from '@/lib/supabase';
 import Button from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
+import AuthShell from '@/components/layout/AuthShell';
 import { Eye, EyeOff } from 'lucide-react';
 
 export default function LoginPage() {
@@ -27,16 +28,16 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-[#1B5E20] to-[#2E7D32] p-4">
+    <AuthShell>
       <div className="w-full max-w-sm">
         {/* Logo */}
         <div className="text-center mb-8">
-          <div className="w-20 h-20 rounded-2xl bg-white/20 flex items-center justify-center text-white font-bold text-3xl mx-auto mb-4 shadow-lg">AE</div>
-          <h1 className="text-2xl font-bold text-white">Aaditri Emerland</h1>
-          <p className="text-white/70 text-sm mt-1">Community App</p>
+          <div className="w-20 h-20 rounded-2xl bg-white/25 backdrop-blur-sm flex items-center justify-center text-white font-bold text-3xl mx-auto mb-4 shadow-lg border border-white/30">AE</div>
+          <h1 className="text-2xl font-bold text-white drop-shadow-sm">Aaditri Emerland</h1>
+          <p className="text-white/85 text-sm mt-1 drop-shadow-sm">Community App</p>
         </div>
 
-        <div className="bg-white rounded-2xl p-6 shadow-2xl">
+        <div className="bg-white/95 backdrop-blur-sm rounded-2xl p-6 shadow-2xl">
           <h2 className="text-xl font-bold text-gray-900 mb-5">Welcome back</h2>
           <form onSubmit={handleLogin} className="space-y-4">
             <Input label="Email address" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" autoComplete="email" />
@@ -57,6 +58,6 @@ export default function LoginPage() {
           </div>
         </div>
       </div>
-    </div>
+    </AuthShell>
   );
 }

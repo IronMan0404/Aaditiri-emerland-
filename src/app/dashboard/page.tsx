@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { Megaphone, Calendar, Bookmark, Images, Radio, Newspaper, ChevronRight, Pin } from 'lucide-react';
 import { createClient } from '@/lib/supabase';
 import { useAuth } from '@/hooks/useAuth';
@@ -44,16 +45,43 @@ export default function DashboardPage() {
 
   return (
     <div className="max-w-4xl mx-auto">
-      {/* Header */}
-      <div className="bg-[#1B5E20] text-white px-6 py-6 md:rounded-b-3xl">
-        <p className="text-white/70 text-sm" suppressHydrationWarning>{greeting},</p>
-        <h1 className="text-2xl font-bold" suppressHydrationWarning>{mounted ? (profile?.full_name || 'Resident') : 'Resident'}</h1>
-        {mounted && profile?.flat_number && <p className="text-white/70 text-sm">Flat {profile.flat_number}</p>}
-        {isAdmin && (
-          <Link href="/admin" className="inline-flex items-center gap-1 mt-2 bg-yellow-400 text-[#1B5E20] text-xs font-bold px-3 py-1 rounded-full">
-            Admin Dashboard →
-          </Link>
-        )}
+      {/* Header — community photo with a green gradient overlay so the existing
+          white text still reads cleanly. The image uses next/image fill so it
+          scales correctly on every viewport. */}
+      <div className="relative h-44 md:h-60 overflow-hidden md:rounded-b-3xl bg-[#1B5E20]">
+        <Image
+          src="/community.webp"
+          alt="Aaditri Emerland community"
+          fill
+          priority
+          sizes="(min-width: 768px) 896px, 100vw"
+          className="object-cover"
+        />
+        {/* Brand-color overlay: darker at the bottom for legibility, semi at the
+            top so the photo still feels present. */}
+        <div className="absolute inset-0 bg-gradient-to-t from-[#0A3D02]/90 via-[#1B5E20]/65 to-[#1B5E20]/40" />
+
+        <div className="relative h-full flex flex-col justify-end text-white px-6 pb-5">
+          <p className="text-white/85 text-sm drop-shadow-sm" suppressHydrationWarning>{greeting},</p>
+          <h1 className="text-2xl font-bold drop-shadow-sm" suppressHydrationWarning>
+            {mounted ? (profile?.full_name || 'Resident') : 'Resident'}
+          </h1>
+          <div className="flex flex-wrap items-center gap-2 mt-1.5">
+            {mounted && profile?.flat_number && (
+              <span className="inline-flex items-center bg-white/20 backdrop-blur-sm text-white text-xs font-medium px-2.5 py-0.5 rounded-full border border-white/20">
+                Flat {profile.flat_number}
+              </span>
+            )}
+            {isAdmin && (
+              <Link
+                href="/admin"
+                className="inline-flex items-center gap-1 bg-yellow-400 text-[#1B5E20] text-xs font-bold px-3 py-1 rounded-full hover:bg-yellow-300 transition-colors"
+              >
+                Admin Dashboard →
+              </Link>
+            )}
+          </div>
+        </div>
       </div>
 
       <div className="px-4 py-4 space-y-6">

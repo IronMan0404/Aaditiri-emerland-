@@ -1,6 +1,6 @@
 'use client';
-import { useState } from 'react';
-import { Camera, LogOut, Lock } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Camera, LogOut, Lock, MessageCircle, Car } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { createClient } from '@/lib/supabase';
 import { useAuth } from '@/hooks/useAuth';
@@ -8,21 +8,54 @@ import { useRouter } from 'next/navigation';
 import Modal from '@/components/ui/Modal';
 import Button from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
+import VehiclesEditor, { type VehicleDraft } from '@/components/ui/VehiclesEditor';
 
 export default function ProfilePage() {
   const { profile, isAdmin, refetchProfile } = useAuth();
   const [editOpen, setEditOpen] = useState(false);
-  const [form, setForm] = useState({ full_name: profile?.full_name || '', phone: profile?.phone || '', flat_number: profile?.flat_number || '', vehicle_number: profile?.vehicle_number || '' });
+  const [form, setForm] = useState({ full_name: profile?.full_name || '', phone: profile?.phone || '', flat_number: profile?.flat_number || '' });
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [whatsappSaving, setWhatsappSaving] = useState(false);
+  const [vehicles, setVehicles] = useState<VehicleDraft[]>([]);
   const router = useRouter();
   const supabase = createClient();
+
+  useEffect(() => {
+    if (!profile?.id) return;
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from('vehicles')
+        .select('id, number, type')
+        .eq('user_id', profile.id)
+        .order('created_at');
+      if (!cancelled && data) setVehicles(data as VehicleDraft[]);
+    })();
+    return () => { cancelled = true; };
+  }, [profile?.id, supabase]);
+
+  const whatsappOptIn = profile?.whatsapp_opt_in !== false;
+
+  async function toggleWhatsAppOptIn() {
+    if (!profile) return;
+    setWhatsappSaving(true);
+    const next = !whatsappOptIn;
+    const { error } = await supabase
+      .from('profiles')
+      .update({ whatsapp_opt_in: next })
+      .eq('id', profile.id);
+    setWhatsappSaving(false);
+    if (error) { toast.error(error.message); return; }
+    toast.success(next ? 'WhatsApp notifications turned on' : 'WhatsApp notifications turned off');
+    refetchProfile?.();
+  }
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
     if (!form.full_name) { toast.error('Name is required'); return; }
     setSaving(true);
-    const { error } = await supabase.from('profiles').update({ full_name: form.full_name, phone: form.phone, flat_number: form.flat_number, vehicle_number: form.vehicle_number }).eq('id', profile?.id);
+    const { error } = await supabase.from('profiles').update({ full_name: form.full_name, phone: form.phone, flat_number: form.flat_number }).eq('id', profile?.id);
     setSaving(false);
     if (error) { toast.error(error.message); return; }
     toast.success('Profile updated!');
@@ -89,14 +122,55 @@ export default function ProfilePage() {
           { label: 'Email', value: profile?.email },
           { label: 'Phone', value: profile?.phone || '—' },
           { label: 'Flat Number', value: profile?.flat_number || '—' },
-          { label: 'Vehicle Number', value: profile?.vehicle_number || '—' },
         ].map(({ label, value }) => (
           <div key={label} className="flex justify-between items-center py-2 border-b border-gray-50 last:border-0">
             <span className="text-sm text-gray-500">{label}</span>
             <span className="text-sm font-semibold text-gray-900">{value}</span>
           </div>
         ))}
-        <Button variant="outline" onClick={() => { setForm({ full_name: profile?.full_name || '', phone: profile?.phone || '', flat_number: profile?.flat_number || '', vehicle_number: profile?.vehicle_number || '' }); setEditOpen(true); }} className="w-full mt-2">Edit Profile</Button>
+        <Button variant="outline" onClick={() => { setForm({ full_name: profile?.full_name || '', phone: profile?.phone || '', flat_number: profile?.flat_number || '' }); setEditOpen(true); }} className="w-full mt-2">Edit Profile</Button>
+      </div>
+
+      {/* Vehicles */}
+      <div className="bg-white rounded-2xl p-4 shadow-sm mb-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1.5">
+            <Car size={12} />Vehicles
+          </h3>
+          <span className="text-[10px] font-bold bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">
+            {vehicles.length}
+          </span>
+        </div>
+        <VehiclesEditor vehicles={vehicles} onChange={setVehicles} userId={profile?.id} />
+      </div>
+
+      {/* Notifications */}
+      <div className="bg-white rounded-2xl p-4 shadow-sm mb-4">
+        <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Notifications</h3>
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-start gap-2 min-w-0">
+            <MessageCircle size={16} className="text-[#25D366] mt-0.5 shrink-0" />
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-gray-800">WhatsApp from Aaditri Bot</p>
+              <p className="text-xs text-gray-500 leading-snug mt-0.5">
+                Admin broadcasts sent to <span className="font-medium text-gray-700">{profile?.phone || 'your phone'}</span>.
+                {!profile?.phone && ' Add a phone number above to receive them.'}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            onClick={toggleWhatsAppOptIn}
+            disabled={whatsappSaving}
+            aria-checked={whatsappOptIn}
+            aria-label={whatsappOptIn ? 'Turn off WhatsApp notifications' : 'Turn on WhatsApp notifications'}
+            title={whatsappOptIn ? 'Turn off WhatsApp notifications' : 'Turn on WhatsApp notifications'}
+            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors shrink-0 ${whatsappOptIn ? 'bg-[#1B5E20]' : 'bg-gray-300'} disabled:opacity-50`}
+          >
+            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${whatsappOptIn ? 'translate-x-6' : 'translate-x-1'}`} />
+          </button>
+        </div>
       </div>
 
       {/* Actions */}
@@ -115,7 +189,7 @@ export default function ProfilePage() {
           <Input label="Full Name *" value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} />
           <Input label="Phone Number" type="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
           <Input label="Flat Number" value={form.flat_number} onChange={(e) => setForm({ ...form, flat_number: e.target.value })} placeholder="e.g. A-201" />
-          <Input label="Vehicle Number" value={form.vehicle_number} onChange={(e) => setForm({ ...form, vehicle_number: e.target.value })} placeholder="e.g. TS09AB1234" />
+          <p className="text-xs text-gray-400 -mt-1">Vehicles are managed in the &ldquo;Vehicles&rdquo; section above.</p>
           <div className="flex gap-3 pt-2">
             <Button type="button" variant="secondary" onClick={() => setEditOpen(false)} className="flex-1">Cancel</Button>
             <Button type="submit" loading={saving} className="flex-1">Save</Button>

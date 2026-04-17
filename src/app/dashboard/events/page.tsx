@@ -42,13 +42,52 @@ export default function EventsPage() {
     e.preventDefault();
     if (!form.title || !form.date || !form.time || !form.location) { toast.error('Fill required fields'); return; }
     setSaving(true);
-    const { error } = await supabase.from('events').insert({ ...form, max_attendees: form.max_attendees ? parseInt(form.max_attendees) : null, created_by: profile?.id });
+    const { data: inserted, error } = await supabase
+      .from('events')
+      .insert({ ...form, max_attendees: form.max_attendees ? parseInt(form.max_attendees) : null, created_by: profile?.id })
+      .select('id')
+      .single();
     setSaving(false);
     if (error) { toast.error(error.message); return; }
     toast.success('Event created!');
     setOpen(false);
     setForm({ title: '', description: '', date: '', time: '', location: '', max_attendees: '' });
     fetch();
+
+    // Fire-and-watch: send calendar invites to all approved residents.
+    // We don't block the UI on this — failures are surfaced as a toast but the
+    // event is already saved. The endpoint itself is a no-op if Resend isn't
+    // configured, so this is safe to run locally without env vars.
+    if (inserted?.id) {
+      toast.loading('Sending calendar invites…', { id: 'invite' });
+      try {
+        const res = await globalThis.fetch('/api/admin/events/invite', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ eventId: inserted.id }),
+        });
+        const payload = (await res.json().catch(() => ({}))) as {
+          error?: string; sent?: number; failed?: number; skipped?: number;
+          reason?: string;
+        };
+        toast.dismiss('invite');
+        if (!res.ok) {
+          toast.error(`Invites: ${payload.error ?? 'failed'}`);
+        } else if (payload.reason) {
+          toast(`Event saved. ${payload.reason}`, { icon: 'ℹ️' });
+        } else {
+          const sent = payload.sent ?? 0;
+          const failed = payload.failed ?? 0;
+          const parts = [`${sent} sent`];
+          if (failed) parts.push(`${failed} failed`);
+          toast.success(`Invites: ${parts.join(', ')}`);
+        }
+      } catch (err) {
+        toast.dismiss('invite');
+        const msg = err instanceof Error ? err.message : 'Invites failed';
+        toast.error(msg);
+      }
+    }
   }
 
   async function handleDelete(id: string) {
@@ -115,8 +154,19 @@ export default function EventsPage() {
           <Input label="Event Title *" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
           <Textarea label="Description" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={3} />
           <div className="grid grid-cols-2 gap-3">
-            <Input label="Date * (YYYY-MM-DD)" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} placeholder="2025-12-25" />
-            <Input label="Time *" value={form.time} onChange={(e) => setForm({ ...form, time: e.target.value })} placeholder="10:00 AM" />
+            <Input
+              label="Date *"
+              type="date"
+              value={form.date}
+              onChange={(e) => setForm({ ...form, date: e.target.value })}
+              min={new Date().toISOString().split('T')[0]}
+            />
+            <Input
+              label="Time *"
+              type="time"
+              value={form.time}
+              onChange={(e) => setForm({ ...form, time: e.target.value })}
+            />
           </div>
           <Input label="Location *" value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} />
           <Input label="Max Attendees" type="number" value={form.max_attendees} onChange={(e) => setForm({ ...form, max_attendees: e.target.value })} />
