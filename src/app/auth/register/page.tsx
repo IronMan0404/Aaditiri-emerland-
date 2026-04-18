@@ -8,6 +8,8 @@ import Button from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import AuthShell from '@/components/layout/AuthShell';
 import VehiclesEditor, { type VehicleDraft } from '@/components/ui/VehiclesEditor';
+import FamilyEditor, { type FamilyMemberDraft } from '@/components/ui/FamilyEditor';
+import PetsEditor, { type PetDraft } from '@/components/ui/PetsEditor';
 
 export default function RegisterPage() {
   const [form, setForm] = useState({
@@ -16,6 +18,8 @@ export default function RegisterPage() {
     password: '', confirmPassword: '',
   });
   const [vehicles, setVehicles] = useState<VehicleDraft[]>([]);
+  const [family, setFamily] = useState<FamilyMemberDraft[]>([]);
+  const [pets, setPets] = useState<PetDraft[]>([]);
   const [loading, setLoading] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const router = useRouter();
@@ -69,16 +73,47 @@ export default function RegisterPage() {
         role: 'user',
         is_approved: false,
       });
-      // Persist any vehicles the user added in the form. Failures here are
-      // non-fatal — the account exists and the resident can add vehicles
-      // later from their profile page.
+      // Persist any vehicles / family / pets the user added in the form.
+      // Failures here are non-fatal — the account exists and the resident
+      // can add or edit them later from their profile page.
+      const userId = data.user.id;
+
       if (vehicles.length > 0) {
-        const rows = vehicles.map((v) => ({ user_id: data.user!.id, number: v.number, type: v.type }));
+        const rows = vehicles.map((v) => ({ user_id: userId, number: v.number, type: v.type }));
         const { error: vehiclesError } = await supabase.from('vehicles').insert(rows);
         if (vehiclesError) {
           toast.error(`Account created, but couldn't save vehicles: ${vehiclesError.message}`);
         }
       }
+
+      if (family.length > 0) {
+        const rows = family.map((m) => ({
+          user_id: userId,
+          full_name: m.full_name,
+          relation: m.relation,
+          gender: m.gender ?? null,
+          age: m.age ?? null,
+          phone: m.phone ?? null,
+        }));
+        const { error: familyError } = await supabase.from('family_members').insert(rows);
+        if (familyError) {
+          toast.error(`Account created, but couldn't save family members: ${familyError.message}`);
+        }
+      }
+
+      if (pets.length > 0) {
+        const rows = pets.map((p) => ({
+          user_id: userId,
+          name: p.name,
+          species: p.species,
+          vaccinated: p.vaccinated,
+        }));
+        const { error: petsError } = await supabase.from('pets').insert(rows);
+        if (petsError) {
+          toast.error(`Account created, but couldn't save pets: ${petsError.message}`);
+        }
+      }
+
       setSubmitted(true);
     }
     setLoading(false);
@@ -143,6 +178,16 @@ export default function RegisterPage() {
             <div>
               <label className="text-sm font-medium text-gray-700 block mb-1.5">Vehicles (optional)</label>
               <VehiclesEditor vehicles={vehicles} onChange={setVehicles} />
+            </div>
+
+            <div>
+              <label className="text-sm font-medium text-gray-700 block mb-1.5">Family Members (optional)</label>
+              <FamilyEditor members={family} onChange={setFamily} />
+            </div>
+
+            <div>
+              <label className="text-sm font-medium text-gray-700 block mb-1.5">Pets (optional)</label>
+              <PetsEditor pets={pets} onChange={setPets} />
             </div>
 
             <Input label="Password *" type="password" value={form.password} onChange={(e) => update('password', e.target.value)} placeholder="Min. 6 characters" />

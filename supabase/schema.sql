@@ -136,6 +136,34 @@ select id, vehicle_number, 'car'
    and length(trim(vehicle_number)) > 0
 on conflict (user_id, number) do nothing;
 
+-- FAMILY MEMBERS (one row per relative living with the resident)
+-- A resident (owner OR tenant) can list spouse, children, parents, etc.
+-- Admins can also view/edit to keep the directory accurate.
+create table if not exists public.family_members (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  full_name text not null,
+  relation text not null check (relation in ('spouse','son','daughter','parent','sibling','other')),
+  gender text check (gender is null or gender in ('male','female','other')),
+  age int check (age is null or (age >= 0 and age <= 120)),
+  phone text,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists family_members_user_idx on public.family_members (user_id);
+
+-- PETS (one row per pet living in the flat)
+create table if not exists public.pets (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  name text not null,
+  species text not null default 'dog' check (species in ('dog','cat','bird','other')),
+  vaccinated boolean not null default false,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists pets_user_idx on public.pets (user_id);
+
 -- COMMUNITY UPDATES
 create table if not exists public.updates (
   id uuid primary key default gen_random_uuid(),
@@ -231,6 +259,8 @@ alter table public.updates enable row level security;
 alter table public.bot_messages enable row level security;
 alter table public.bot_message_recipients enable row level security;
 alter table public.vehicles enable row level security;
+alter table public.family_members enable row level security;
+alter table public.pets enable row level security;
 
 -- PROFILES policies
 -- Idempotent: drop old versions before recreating so re-running this file is safe.
@@ -386,6 +416,52 @@ create policy "Users manage their own vehicles"
 -- or remove a sold car when a resident asks).
 create policy "Admins can manage any vehicle"
   on public.vehicles for all
+  to authenticated
+  using (exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'))
+  with check (exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'));
+
+-- FAMILY MEMBERS policies
+-- Idempotent: drop old versions before recreating so re-running this file is safe.
+drop policy if exists "Family members are viewable by authenticated users" on public.family_members;
+drop policy if exists "Users manage their own family members" on public.family_members;
+drop policy if exists "Admins can manage any family member" on public.family_members;
+
+create policy "Family members are viewable by authenticated users"
+  on public.family_members for select
+  to authenticated
+  using (true);
+
+create policy "Users manage their own family members"
+  on public.family_members for all
+  to authenticated
+  using (user_id = auth.uid())
+  with check (user_id = auth.uid());
+
+create policy "Admins can manage any family member"
+  on public.family_members for all
+  to authenticated
+  using (exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'))
+  with check (exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'));
+
+-- PETS policies
+-- Idempotent: drop old versions before recreating so re-running this file is safe.
+drop policy if exists "Pets are viewable by authenticated users" on public.pets;
+drop policy if exists "Users manage their own pets" on public.pets;
+drop policy if exists "Admins can manage any pet" on public.pets;
+
+create policy "Pets are viewable by authenticated users"
+  on public.pets for select
+  to authenticated
+  using (true);
+
+create policy "Users manage their own pets"
+  on public.pets for all
+  to authenticated
+  using (user_id = auth.uid())
+  with check (user_id = auth.uid());
+
+create policy "Admins can manage any pet"
+  on public.pets for all
   to authenticated
   using (exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'))
   with check (exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'));

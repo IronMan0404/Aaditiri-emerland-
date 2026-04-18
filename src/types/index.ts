@@ -107,6 +107,31 @@ export interface Vehicle {
   created_at: string;
 }
 
+export type FamilyRelation = 'spouse' | 'son' | 'daughter' | 'parent' | 'sibling' | 'other';
+export type Gender = 'male' | 'female' | 'other';
+
+export interface FamilyMember {
+  id: string;
+  user_id: string;
+  full_name: string;
+  relation: FamilyRelation;
+  gender?: Gender | null;
+  age?: number | null;
+  phone?: string | null;
+  created_at: string;
+}
+
+export type PetSpecies = 'dog' | 'cat' | 'bird' | 'other';
+
+export interface Pet {
+  id: string;
+  user_id: string;
+  name: string;
+  species: PetSpecies;
+  vaccinated: boolean;
+  created_at: string;
+}
+
 export interface BotMessageRecipient {
   id: string;
   message_id: string;

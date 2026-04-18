@@ -20,8 +20,28 @@ export default function EventsPage() {
   const supabase = createClient();
 
   const fetch = async () => {
-    const { data } = await supabase.from('events').select('*, profiles(full_name), event_rsvps(id, user_id, status)').order('date');
-    if (data) setEvents(data);
+    // Pull everything (incl. past events so admins can prune them) and sort
+    // client-side: upcoming events first (soonest at top), then past events
+    // (most recent at top). Plain `order('date')` was putting old events
+    // above new ones, which the admin team complained about.
+    const { data } = await supabase
+      .from('events')
+      .select('*, profiles(full_name), event_rsvps(id, user_id, status)');
+    if (data) {
+      const today = new Date().toISOString().slice(0, 10);
+      const sorted = [...data].sort((a, b) => {
+        const aPast = a.date < today;
+        const bPast = b.date < today;
+        if (aPast !== bPast) return aPast ? 1 : -1; // upcoming before past
+        if (aPast) {
+          // both past: most recent past first
+          return b.date.localeCompare(a.date);
+        }
+        // both upcoming: soonest first
+        return a.date.localeCompare(b.date);
+      });
+      setEvents(sorted);
+    }
     setLoading(false);
   };
   useEffect(() => { fetch(); }, []);
@@ -139,8 +159,15 @@ export default function EventsPage() {
                       </button>
                     )}
                   </div>
-                  {isAdmin && !isPast && (
-                    <button onClick={() => handleDelete(ev.id)} className="text-gray-300 hover:text-red-500 transition-colors"><Trash2 size={16} /></button>
+                  {isAdmin && (
+                    <button
+                      onClick={() => handleDelete(ev.id)}
+                      title={isPast ? 'Delete past event' : 'Delete event'}
+                      aria-label={`Delete ${ev.title}`}
+                      className="text-gray-300 hover:text-red-500 transition-colors"
+                    >
+                      <Trash2 size={16} />
+                    </button>
                   )}
                 </div>
               </div>

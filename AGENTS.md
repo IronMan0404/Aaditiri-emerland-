@@ -48,8 +48,9 @@ Mobile-first PWA for residents of the Aaditri Emerland community — announcemen
 Supabase key is read as: `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` first, then `NEXT_PUBLIC_SUPABASE_ANON_KEY`. Support both schemes in any new code.
 
 ### 6. RLS is the source of truth for data access
-- Every table in `supabase/schema.sql` has RLS policies. Never use the service-role key from this app.
+- Every table in `supabase/schema.sql` has RLS policies. Default to RLS for everything in `public.*`.
 - When adding a new table or query, also add/update the matching RLS policy.
+- **Single documented exception**: `src/lib/supabase-admin.ts` exports a privileged client backed by `SUPABASE_SERVICE_ROLE_KEY`, used ONLY by `/api/admin/users/[id]/delete` to drop a row from `auth.users` (RLS does not apply to the auth schema). The factory imports `'server-only'` so it can never be bundled into the browser. Do not add new call sites without an equally strong justification — prefer a new RLS policy whenever possible.
 
 ### 7. Windows + WSL warning
 The repo lives at `C:\work\aaditri-emerland-web`. **Never run `next dev` from WSL against `/mnt/c/...`** — it corrupts Turbopack's cache. If someone hits `Cannot find module '../chunks/ssr/[turbopack]_runtime.js'`, first run:

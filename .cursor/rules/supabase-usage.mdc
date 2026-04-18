@@ -26,9 +26,11 @@ const key =
 
 Support both schemes in any new server-side code.
 
-## NEVER use the service-role key
+## Service-role key — single documented exception
 
-This app does NOT use `SUPABASE_SERVICE_ROLE_KEY`. All access is controlled by **Row Level Security** in `supabase/schema.sql`. If you think you need the service role, you almost certainly need a new RLS policy instead.
+Default rule: do NOT use `SUPABASE_SERVICE_ROLE_KEY`. All access is controlled by **Row Level Security** in `supabase/schema.sql`. If you think you need the service role, you almost certainly need a new RLS policy instead.
+
+**Documented exception**: `src/lib/supabase-admin.ts` exposes `createAdminSupabaseClient()` for the ONE operation RLS cannot help with — deleting a row from `auth.users` from `/api/admin/users/[id]/delete`. The module imports `'server-only'`, so it cannot be reached from any browser bundle. Adding new call sites requires the same level of justification (operation impossible to express as RLS).
 
 ## Schema changes
 

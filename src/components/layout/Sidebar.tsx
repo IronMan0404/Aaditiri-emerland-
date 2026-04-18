@@ -1,7 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Megaphone, Calendar, Bookmark, Images, Radio, User, Home, Settings, Newspaper, LogOut, Shield, MessageSquare, Bot } from 'lucide-react';
+import { Megaphone, Calendar, Bookmark, Images, Radio, User, Home, Settings, Newspaper, LogOut, Shield, MessageSquare, Bot, Users } from 'lucide-react';
 import { createClient } from '@/lib/supabase';
 import { useAuth } from '@/hooks/useAuth';
 import { useRouter } from 'next/navigation';
@@ -11,6 +11,7 @@ const navItems = [
   { href: '/dashboard', icon: Home, label: 'Home' },
   { href: '/dashboard/announcements', icon: Megaphone, label: 'Announcements' },
   { href: '/dashboard/messages', icon: MessageSquare, label: 'Messages' },
+  { href: '/dashboard/community', icon: Users, label: 'Community' },
   { href: '/dashboard/events', icon: Calendar, label: 'Events' },
   { href: '/dashboard/bookings', icon: Bookmark, label: 'Bookings' },
   { href: '/dashboard/gallery', icon: Images, label: 'Gallery' },
