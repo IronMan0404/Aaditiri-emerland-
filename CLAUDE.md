@@ -32,4 +32,5 @@
 - `AGENTS.md` → project rules (authoritative).
 - `README.md` → overview, features, structure.
 - `DEPLOYMENT.md` → Supabase + Vercel setup, troubleshooting.
+- `docs/NEWS.md` → architecture of the `/dashboard/news` section (9 API routes, geolocation, security, mobile UX). Read before touching anything under `src/app/api/news/` or `src/components/news/`.
 - `node_modules/next/dist/docs/` → Next.js 16 API reference.

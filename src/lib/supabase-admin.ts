@@ -7,10 +7,15 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
  * server actions, server components) and ONLY for operations that cannot
  * be expressed as a Row-Level-Security policy.
  *
- * The most common — and currently only — legitimate use is admin actions
- * against the `auth.users` table (e.g. permanently deleting an account),
- * because the auth schema is not exposed to the regular `@supabase/ssr`
- * client at all.
+ * Legitimate use cases (each one is justified individually in AGENTS.md):
+ *   - Admin permanently deleting a user (auth.users row) — see
+ *     /api/admin/users/[id]/delete.
+ *   - Self-service registration that creates the user pre-confirmed,
+ *     bypassing Supabase's built-in mailer's 2/hr rate limit — see
+ *     /api/auth/register. We send our own welcome email via Brevo instead.
+ *
+ * Both touch the auth schema, which is not reachable from the regular
+ * `@supabase/ssr` client at all.
  *
  * NEVER import this module from a `'use client'` component or any code
  * path that ships to the browser. The `server-only` import above will

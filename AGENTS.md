@@ -50,9 +50,57 @@ Supabase key is read as: `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` first, then `NEX
 ### 6. RLS is the source of truth for data access
 - Every table in `supabase/schema.sql` has RLS policies. Default to RLS for everything in `public.*`.
 - When adding a new table or query, also add/update the matching RLS policy.
-- **Single documented exception**: `src/lib/supabase-admin.ts` exports a privileged client backed by `SUPABASE_SERVICE_ROLE_KEY`, used ONLY by `/api/admin/users/[id]/delete` to drop a row from `auth.users` (RLS does not apply to the auth schema). The factory imports `'server-only'` so it can never be bundled into the browser. Do not add new call sites without an equally strong justification — prefer a new RLS policy whenever possible.
+- **Documented exceptions** (only for operations that touch `auth.users`, which is not reachable via RLS): `src/lib/supabase-admin.ts` exports a privileged client backed by `SUPABASE_SERVICE_ROLE_KEY`, used by:
+  - `/api/admin/users/[id]/delete` — admin permanently removing a user (cascades to `public.*`).
+  - `/api/auth/register` — self-service registration that creates the user pre-confirmed (`email_confirm: true`) so Supabase's built-in mailer is not invoked. We send our own welcome email through Brevo (`src/lib/email.ts`) instead. This sidesteps Supabase's hard ~2/hour confirmation-email rate limit on the free tier.
+  
+  The factory imports `'server-only'` so it can never be bundled into the browser. Do not add new call sites without an equally strong justification — prefer a new RLS policy whenever possible.
 
-### 7. Windows + WSL warning
+### 7a. News section (`/dashboard/news`) — location-aware, 9 panels
+
+Full spec lives in [`docs/NEWS.md`](./docs/NEWS.md). Key constraints when editing:
+
+**Architecture.** Single client page at `src/app/dashboard/news/page.tsx` renders one of nine panel components from `src/components/news/panels.tsx` based on the active tab. Each panel fetches its own data lazily on mount, scoped to the user's resolved location.
+
+**Geolocation.** `src/hooks/useGeoLocation.ts` is the single source of truth for the active city + coords. On first visit it auto-prompts the browser once (and remembers the user's choice in `localStorage` under `ae-news-location` so we never re-prompt). Falls back to Hyderabad on denial. Manual override via `<LocationPicker>` (`src/components/news/LocationPicker.tsx`). All panels MUST receive `location: ResolvedLocation` and refetch when its `lat`/`lon`/`city` changes — never hard-code coords inside a panel.
+
+**Hydration discipline.** The page renders nothing while `geo.hydrating` is true (the brief moment before localStorage is read). This prevents a double-fetch (fallback → real city) and a flash of Hyderabad data for a non-Hyderabad user.
+
+**API routes.** All under `src/app/api/news/`:
+
+| Route | Source | Cache | Notes |
+|---|---|---|---|
+| `weather` | Open-Meteo forecast | 10 min | Accepts `?lat=&lon=&city=`. Defaults to Hyderabad. Validates coords. |
+| `air-quality` | Open-Meteo Air Quality | 15 min | US AQI + dominant pollutant. Same param contract. |
+| `feeds?category=traffic\|local\|hyderabad\|ai&city=` | Hand-curated RSS + Google News RSS | 15 min | `local` is dynamic per city (curated for major Indian cities, Google News fallback otherwise). `hyderabad` is the legacy alias for back-compat. |
+| `cricket` | Google News RSS (cricket-scoped) | 10 min | City-independent. |
+| `markets` | Yahoo Finance v8 chart | 5 min | NIFTY, SENSEX, BANK NIFTY, USD/INR, EUR/INR, Gold. v7 quote endpoint requires auth — don't switch back. Yahoo blocks the default Node UA, so we always send a browser UA. |
+| `panchang` | Computed locally | 1 hour | Tithi/moon phase from Conway's lunar-age algorithm + sunrise/sunset from Open-Meteo. No external Panchang API (they all need keys). |
+| `fuel?city=` | Google News RSS scoped to "<city> petrol diesel price" | 30 min | Headlines, not raw numbers — every public price API needs a key. |
+| `geocode?lat=&lon=` (reverse) or `?q=` (forward) | Nominatim (OSM) reverse + Open-Meteo geocoding forward | 24 hours | Nominatim's policy requires a real `User-Agent` — we send `AaditriEmerland/1.0`. Don't strip it. |
+
+**RSS parser.** `src/lib/rss.ts` is dependency-free. The `clean()` function does CDATA unwrap → entity decode → strip `<a>`/`<img>`/`<script>`/`<style>` → strip remaining tags, **in that order**. Reordering breaks Times of India feeds (their HTML is XML-escaped in `<description>`). The parser also extracts the first usable thumbnail URL from `<enclosure>`, `<media:thumbnail>`, `<media:content>`, or `<img>` in the description.
+
+**Security.** Every external link (article URLs and image URLs) passes through `safeUrl()` (http(s) only) inside `panels.tsx` before reaching `<a href>` or `<img src>`. This neutralises `javascript:` / `data:` payloads from hostile feeds. Don't bypass it.
+
+**Mobile-first layout.** Panels are written for a 320–414px viewport first; `sm:` breakpoint expands to desktop. Don't introduce fixed pixel widths or tables — the page sits inside a mobile bottom-nav layout and breaks if anything overflows. Tab strip uses `-mx-3 sm:mx-0` (full-bleed scroll on mobile, wraps on desktop) with a right-edge gradient fade as a scroll affordance.
+
+**Sharing.** `src/lib/share.ts` exports `shareOrCopy()` — uses Web Share API on supported browsers (mostly mobile), falls back to clipboard + toast. Always call this rather than `navigator.share` directly.
+
+**Adding a new tab.** Don't bolt logic onto `panels.tsx` indefinitely — once that file passes ~600 lines, split per-panel into `src/components/news/<Name>Panel.tsx`. Add the new tab id to the `Tab` union and the `TABS` array in `page.tsx`.
+
+**No API keys, no new dependencies.** Every external service used is unauthenticated and free-tier safe at our cache rates. If a feature needs a paid API, find an alternative or skip it.
+
+### 7. Web push notifications
+- Service worker lives at `public/sw.js` and is registered manually by `src/components/pwa/PushSubscriber.tsx` (we do **not** rely on `next-pwa` to register it — that runtime fights Next 16 + Turbopack dev).
+- VAPID keys live in env vars: `NEXT_PUBLIC_VAPID_PUBLIC_KEY` (browser), `VAPID_PRIVATE_KEY` and `VAPID_SUBJECT` (server-only).
+- Generate a key pair once per env: `npx web-push generate-vapid-keys`.
+- Server-side push helper: `src/lib/push.ts` (uses `createAdminSupabaseClient` to read subscriptions across all users).
+- New tables: `public.push_subscriptions` (one row per device endpoint) and `public.event_reminders_sent` (dedup ledger for the 24h cron).
+- `/api/cron/event-reminders` runs hourly via `vercel.json` `crons` and is gated by `CRON_SECRET`.
+- Broadcasts trigger a fan-out via `/api/push/broadcast` after the row is inserted client-side. Push is **best-effort** — a missing VAPID config returns `{ skipped: 'not_configured' }` and the in-app row is still authoritative.
+
+### 8. Windows + WSL warning
 The repo lives at `C:\work\aaditri-emerland-web`. **Never run `next dev` from WSL against `/mnt/c/...`** — it corrupts Turbopack's cache. If someone hits `Cannot find module '../chunks/ssr/[turbopack]_runtime.js'`, first run:
 ```powershell
 wsl -d Ubuntu -u root -- ps -ef | Select-String next

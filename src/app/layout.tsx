@@ -6,6 +6,10 @@ export const metadata: Metadata = {
   title: "Aaditri Emerland Community",
   description: "Official community app for Aaditri Emerland residents",
   manifest: "/manifest.json",
+  icons: {
+    icon: [{ url: "/icon.svg", type: "image/svg+xml" }],
+    apple: [{ url: "/icon.svg", type: "image/svg+xml" }],
+  },
   appleWebApp: { capable: true, statusBarStyle: "default", title: "AE Community" },
 };
 
@@ -20,7 +24,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className="h-full">
       <head>
-        <link rel="apple-touch-icon" href="/icon-192.png" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
       </head>
       <body className="h-full bg-gray-50">

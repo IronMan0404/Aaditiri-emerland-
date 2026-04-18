@@ -50,10 +50,19 @@ src/
 │   ├── api/                # NEW: server-only API routes
 │   │   ├── _debug/
 │   │   │   └── email-status/    # admin-only email-config sanity check
-│   │   └── admin/
-│   │       ├── bookings/[id]/approve/   # approves + emails .ics invite
-│   │       ├── events/invite/           # broadcasts event invite to all
-│   │       └── messages/send/           # bot-message fan-out (+ WhatsApp)
+│   │   ├── admin/
+│   │   │   ├── bookings/[id]/approve/   # approves + emails .ics invite
+│   │   │   ├── events/invite/           # broadcasts event invite to all
+│   │   │   └── messages/send/           # bot-message fan-out (+ WhatsApp)
+│   │   └── news/                # NEW: location-aware News section backend
+│   │       ├── weather/                 # Open-Meteo forecast + alerts
+│   │       ├── air-quality/             # Open-Meteo AQI (US scale)
+│   │       ├── feeds/                   # RSS aggregator (traffic/local/ai)
+│   │       ├── cricket/                 # cricket headlines via Google News RSS
+│   │       ├── markets/                 # Yahoo Finance v8 (NIFTY/SENSEX/USDINR/Gold)
+│   │       ├── panchang/                # local tithi + sun times
+│   │       ├── fuel/                    # petrol/diesel news headlines
+│   │       └── geocode/                 # Nominatim reverse + Open-Meteo forward
 │   ├── auth/
 │   │   ├── admin-login/
 │   │   ├── login/
@@ -66,6 +75,7 @@ src/
 │   │   ├── events/         # native date/time picker; auto-emails invites
 │   │   ├── gallery/
 │   │   ├── messages/       # NEW: per-user bot-message inbox
+│   │   ├── news/           # NEW: location-aware news, weather, AQI, markets, panchang…
 │   │   ├── profile/        # vehicles editor, WhatsApp opt-in
 │   │   ├── layout.tsx
 │   │   └── page.tsx        # community-photo hero
@@ -74,13 +84,17 @@ src/
 │   └── page.tsx
 ├── components/
 │   ├── layout/             # Sidebar, TopBar, MobileNav, AuthShell (NEW)
+│   ├── news/               # NEW: LocationPicker + panels (Weather/AQI/Markets/Panchang/Feed)
 │   └── ui/                 # Button, Input, Modal, VehiclesEditor (NEW)
 ├── hooks/
-│   └── useAuth.ts
+│   ├── useAuth.ts
+│   └── useGeoLocation.ts   # NEW: browser geolocation + reverse-geocode + cache
 ├── lib/
 │   ├── email.ts            # NEW: Brevo transactional sender
 │   ├── ics.ts              # NEW: RFC 5545 calendar-invite builder
 │   ├── msg91.ts            # NEW: WhatsApp template sender (server-only)
+│   ├── rss.ts              # NEW: dependency-free RSS/Atom parser
+│   ├── share.ts            # NEW: Web Share API + clipboard fallback
 │   ├── supabase.ts
 │   └── supabase-server.ts
 ├── types/
@@ -101,6 +115,7 @@ docs/                       # NEW per-feature documentation
 ├── CALENDAR_INVITES.md
 ├── BREVO_EMAIL.md
 ├── MSG91_WHATSAPP.md
+├── NEWS.md                 # NEW: news section architecture (9 endpoints, geolocation, security)
 └── ADMIN_BOOKING_REVOKE.md
 ```
 
@@ -118,11 +133,21 @@ docs/                       # NEW per-feature documentation
 - **Admin Bot Messages**: send a message as "Aaditri Bot" to every approved resident, with per-user read receipts and an inbox at `/dashboard/messages`.
 - **Multiple vehicles per resident**: dedicated `vehicles` table; admin and resident can add/remove with a per-vehicle type (car/bike/other).
 - **Visual identity**: community photo used as a hero on the dashboard and as a background on every auth page.
+- **News section** ([`docs/NEWS.md`](./docs/NEWS.md)) — location-aware dashboard with nine tabs: Weather, Air Quality, Traffic & Civic, Local News, Markets, Cricket, Panchang, Fuel News, AI/Tech. Auto-detects the user's city (with Hyderabad fallback) and lets them switch via a built-in city search. Mobile-first layout with thumbnails, share buttons, and per-panel filtering.
 - **PWA**: installable, brand-themed, offline-ready shell.
 
 ### Optional integrations (graceful-degrade if not configured)
 - **Email** via [Brevo](./docs/BREVO_EMAIL.md) — sends `.ics` calendar invites when an admin creates an event or approves a booking. Free tier covers 300 emails/day.
 - **WhatsApp** via [MSG91](./docs/MSG91_WHATSAPP.md) — bot messages also go out as WhatsApp template messages. Per-resident opt-in.
+
+### Free third-party data sources used by the News section (no keys needed)
+- **[Open-Meteo](https://open-meteo.com/)** — weather forecast + air quality
+- **[Nominatim (OpenStreetMap)](https://nominatim.org/)** — reverse geocoding (lat/lon → city)
+- **[Open-Meteo Geocoding](https://open-meteo.com/en/docs/geocoding-api)** — forward geocoding (city search)
+- **[Yahoo Finance v8 chart](https://query1.finance.yahoo.com/)** — market quotes
+- **[Google News RSS](https://news.google.com/rss)** — traffic, civic, cricket, fuel, and city-news fallback
+
+All cached server-side via Next.js `revalidate`; no API keys, no new dependencies. See [`docs/NEWS.md`](./docs/NEWS.md) for cache TTLs, fallback behaviour, and security model.
 
 ## Getting Started
 

@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { Plus, MapPin, Clock, Users, Trash2, CheckCircle } from 'lucide-react';
+import { Plus, MapPin, Clock, Users, Trash2, Check, HelpCircle, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { createClient } from '@/lib/supabase';
 import { useAuth } from '@/hooks/useAuth';
@@ -9,6 +9,33 @@ import Button from '@/components/ui/Button';
 import { Input, Textarea } from '@/components/ui/Input';
 import { format } from 'date-fns';
 import type { Event } from '@/types';
+
+type RsvpStatus = 'going' | 'maybe' | 'not_going';
+
+interface RsvpButtonProps {
+  status: RsvpStatus;
+  active: boolean;
+  onClick: () => void;
+  icon: React.ComponentType<{ size?: number }>;
+  label: string;
+  activeClass: string;
+}
+
+function RsvpButton({ active, onClick, icon: Icon, label, activeClass }: RsvpButtonProps) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+        active ? activeClass : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+      }`}
+    >
+      <Icon size={14} />
+      {label}
+    </button>
+  );
+}
 
 export default function EventsPage() {
   const { profile, isAdmin } = useAuth();
@@ -46,14 +73,28 @@ export default function EventsPage() {
   };
   useEffect(() => { fetch(); }, []);
 
-  async function handleRsvp(eventId: string, hasRsvp: boolean) {
+  // Set the user's RSVP status. Tapping the same status twice clears it
+  // (delete row), which lets a user undo an accidental tap without forcing
+  // them to pick a different bucket.
+  async function handleRsvp(eventId: string, status: RsvpStatus, current: RsvpStatus | null) {
     if (!profile) return;
-    if (hasRsvp) {
+    if (current === status) {
       await supabase.from('event_rsvps').delete().eq('event_id', eventId).eq('user_id', profile.id);
-      toast.success('RSVP removed');
+      toast.success('RSVP cleared');
     } else {
-      await supabase.from('event_rsvps').upsert({ event_id: eventId, user_id: profile.id, status: 'going' });
-      toast.success("You're going! 🎉");
+      const { error } = await supabase
+        .from('event_rsvps')
+        .upsert(
+          { event_id: eventId, user_id: profile.id, status },
+          { onConflict: 'event_id,user_id' }
+        );
+      if (error) { toast.error(error.message); return; }
+      const labels: Record<RsvpStatus, string> = {
+        going: "You're going!",
+        maybe: 'Marked as maybe',
+        not_going: "Marked as not going",
+      };
+      toast.success(labels[status]);
     }
     fetch();
   }
@@ -131,9 +172,11 @@ export default function EventsPage() {
       ) : (
         <div className="space-y-3">
           {events.map((ev) => {
-            const rsvps = (ev as any).event_rsvps || [];
-            const userRsvp = rsvps.find((r: any) => r.user_id === profile?.id);
-            const count = rsvps.filter((r: any) => r.status === 'going').length;
+            const rsvps = ev.event_rsvps ?? [];
+            const userRsvp = rsvps.find((r) => r.user_id === profile?.id) ?? null;
+            const userStatus = (userRsvp?.status ?? null) as RsvpStatus | null;
+            const goingCount = rsvps.filter((r) => r.status === 'going').length;
+            const maybeCount = rsvps.filter((r) => r.status === 'maybe').length;
             const isPast = new Date(ev.date) < new Date();
             return (
               <div key={ev.id} className={`bg-white rounded-xl p-4 shadow-sm ${isPast ? 'opacity-60' : ''}`}>
@@ -147,16 +190,35 @@ export default function EventsPage() {
                     <div className="grid grid-cols-2 gap-y-1 mt-3">
                       <span className="flex items-center gap-1.5 text-xs text-gray-500"><Clock size={12} />{format(new Date(ev.date), 'dd MMM yyyy')} · {ev.time}</span>
                       <span className="flex items-center gap-1.5 text-xs text-gray-500"><MapPin size={12} />{ev.location}</span>
-                      <span className="flex items-center gap-1.5 text-xs text-gray-500"><Users size={12} />{count} going{ev.max_attendees ? ` / ${ev.max_attendees}` : ''}</span>
+                      <span className="flex items-center gap-1.5 text-xs text-gray-500"><Users size={12} />{goingCount} going{maybeCount ? ` · ${maybeCount} maybe` : ''}{ev.max_attendees ? ` / ${ev.max_attendees}` : ''}</span>
                     </div>
                     {!isPast && (
-                      <button
-                        onClick={() => handleRsvp(ev.id, !!userRsvp)}
-                        className={`mt-3 flex items-center gap-1.5 px-4 py-1.5 rounded-xl text-xs font-semibold transition-all ${userRsvp ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700 hover:bg-green-50 hover:text-green-700'}`}
-                      >
-                        <CheckCircle size={14} />
-                        {userRsvp ? "You're Going!" : "RSVP"}
-                      </button>
+                      <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label="RSVP">
+                        <RsvpButton
+                          status="going"
+                          active={userStatus === 'going'}
+                          onClick={() => handleRsvp(ev.id, 'going', userStatus)}
+                          icon={Check}
+                          label="Going"
+                          activeClass="bg-green-100 text-green-700 ring-1 ring-green-300"
+                        />
+                        <RsvpButton
+                          status="maybe"
+                          active={userStatus === 'maybe'}
+                          onClick={() => handleRsvp(ev.id, 'maybe', userStatus)}
+                          icon={HelpCircle}
+                          label="Maybe"
+                          activeClass="bg-amber-100 text-amber-700 ring-1 ring-amber-300"
+                        />
+                        <RsvpButton
+                          status="not_going"
+                          active={userStatus === 'not_going'}
+                          onClick={() => handleRsvp(ev.id, 'not_going', userStatus)}
+                          icon={X}
+                          label="Not Going"
+                          activeClass="bg-red-100 text-red-700 ring-1 ring-red-300"
+                        />
+                      </div>
                     )}
                   </div>
                   {isAdmin && (
