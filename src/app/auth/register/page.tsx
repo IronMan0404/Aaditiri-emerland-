@@ -35,10 +35,21 @@ export default function RegisterPage() {
     if (form.password.length < 6) { toast.error('Password must be at least 6 characters'); return; }
 
     setLoading(true);
+    // Build the confirmation-link redirect from the current browser origin so
+    // the email link always points at the deployment the user registered on
+    // (Vercel in prod, localhost in dev) instead of the Supabase project's
+    // hard-coded Site URL. The target origin must also be listed under
+    // Authentication -> URL Configuration -> Redirect URLs in Supabase.
+    const emailRedirectTo =
+      typeof window !== 'undefined'
+        ? `${window.location.origin}/auth/callback`
+        : undefined;
+
     const { data, error } = await supabase.auth.signUp({
       email: form.email.trim(),
       password: form.password,
       options: {
+        emailRedirectTo,
         data: {
           full_name: form.fullName,
           flat_number: form.flatNumber,
