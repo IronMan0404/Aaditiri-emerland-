@@ -1,6 +1,6 @@
-# Aaditri Emerland Community Web App
+# Aaditri Emerald Community Web App
 
-Official community app for residents of Aaditri Emerland. It's a mobile-first PWA for announcements, events, facility bookings, a photo gallery, broadcasts, and admin management.
+Official community app for residents of Aaditri Emerald. It's a mobile-first PWA for announcements, events, facility bookings, a photo gallery, broadcasts, and admin management.
 
 ## Tech Stack
 
