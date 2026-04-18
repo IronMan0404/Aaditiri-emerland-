@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
-import { Shield, ShieldOff, CheckCircle, Search, X, Pencil, AlertTriangle, Bot, Car } from 'lucide-react';
+import { Shield, ShieldOff, CheckCircle, Search, X, Pencil, AlertTriangle, Bot, Car, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { createClient } from '@/lib/supabase';
 import { useAuth } from '@/hooks/useAuth';
@@ -58,6 +58,10 @@ export default function AdminUsersPage() {
   const [confirmSelfDemote, setConfirmSelfDemote] = useState(false);
   const [saving, setSaving] = useState(false);
   const [vehiclesByUser, setVehiclesByUser] = useState<Record<string, VehicleDraft[]>>({});
+
+  const [deleteTarget, setDeleteTarget] = useState<Profile | null>(null);
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  const [deleting, setDeleting] = useState(false);
 
   const supabase = createClient();
 
@@ -174,6 +178,41 @@ export default function AdminUsersPage() {
     if (error) { toast.error(error.message); return; }
     toast.success(`${user.full_name} marked as ${type}`);
     fetchUsers();
+  }
+
+  function openDelete(user: Profile) {
+    setDeleteTarget(user);
+    setDeleteConfirmText('');
+  }
+  function closeDelete() {
+    setDeleteTarget(null);
+    setDeleteConfirmText('');
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget) return;
+    if (deleteConfirmText.trim().toLowerCase() !== 'delete') {
+      toast.error('Type DELETE to confirm');
+      return;
+    }
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/admin/users/${deleteTarget.id}/delete`, {
+        method: 'POST',
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(json.error || `Delete failed (${res.status})`);
+        return;
+      }
+      toast.success(`${deleteTarget.full_name} permanently deleted`);
+      closeDelete();
+      fetchUsers();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Network error');
+    } finally {
+      setDeleting(false);
+    }
   }
 
   async function saveEdit(e: React.FormEvent) {
@@ -393,6 +432,16 @@ export default function AdminUsersPage() {
                           Deactivate
                         </button>
                       )}
+                      {!isSelf && (
+                        <button
+                          onClick={() => openDelete(u)}
+                          title={`Delete ${u.full_name} permanently`}
+                          aria-label={`Delete ${u.full_name}`}
+                          className="p-1.5 rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-600 transition-colors"
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -532,6 +581,54 @@ export default function AdminUsersPage() {
               <Button type="submit" loading={saving} disabled={blockSelfDemote} className="flex-1">Save changes</Button>
             </div>
           </form>
+        )}
+      </Modal>
+
+      {/* Delete user modal */}
+      <Modal open={!!deleteTarget} onClose={closeDelete} title="Delete user permanently?">
+        {deleteTarget && (
+          <div className="space-y-4">
+            <div className="bg-red-50 border border-red-200 rounded-xl p-3 flex items-start gap-2">
+              <AlertTriangle size={18} className="text-red-600 flex-shrink-0 mt-0.5" />
+              <div className="text-xs text-red-700 leading-snug">
+                <p className="font-bold mb-1">This cannot be undone.</p>
+                <p>
+                  All of <strong>{deleteTarget.full_name}</strong>'s data will be removed:
+                  profile, vehicles, family members, pets, RSVPs, bookings,
+                  uploaded photos, and login credentials. The email{' '}
+                  <span className="font-mono">{deleteTarget.email}</span> will
+                  become available for re-registration.
+                </p>
+              </div>
+            </div>
+
+            <div>
+              <label htmlFor="delete-confirm" className="text-sm font-medium text-gray-700 block mb-1.5">
+                Type <span className="font-mono font-bold text-red-600">DELETE</span> to confirm
+              </label>
+              <input
+                id="delete-confirm"
+                type="text"
+                value={deleteConfirmText}
+                onChange={(e) => setDeleteConfirmText(e.target.value)}
+                placeholder="DELETE"
+                autoComplete="off"
+                className="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm font-mono focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-transparent bg-white"
+              />
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <Button type="button" variant="outline" onClick={closeDelete} className="flex-1">Cancel</Button>
+              <button
+                type="button"
+                onClick={confirmDelete}
+                disabled={deleting || deleteConfirmText.trim().toLowerCase() !== 'delete'}
+                className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {deleting ? 'Deleting…' : (<><Trash2 size={14} />Delete forever</>)}
+              </button>
+            </div>
+          </div>
         )}
       </Modal>
     </div>

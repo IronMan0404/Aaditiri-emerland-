@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { Camera, LogOut, Lock, MessageCircle, Car } from 'lucide-react';
+import { Camera, LogOut, Lock, MessageCircle, Car, Users, PawPrint } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { createClient } from '@/lib/supabase';
 import { useAuth } from '@/hooks/useAuth';
@@ -9,6 +9,8 @@ import Modal from '@/components/ui/Modal';
 import Button from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import VehiclesEditor, { type VehicleDraft } from '@/components/ui/VehiclesEditor';
+import FamilyEditor, { type FamilyMemberDraft } from '@/components/ui/FamilyEditor';
+import PetsEditor, { type PetDraft } from '@/components/ui/PetsEditor';
 
 export default function ProfilePage() {
   const { profile, isAdmin, refetchProfile } = useAuth();
@@ -18,6 +20,8 @@ export default function ProfilePage() {
   const [uploading, setUploading] = useState(false);
   const [whatsappSaving, setWhatsappSaving] = useState(false);
   const [vehicles, setVehicles] = useState<VehicleDraft[]>([]);
+  const [family, setFamily] = useState<FamilyMemberDraft[]>([]);
+  const [pets, setPets] = useState<PetDraft[]>([]);
   const router = useRouter();
   const supabase = createClient();
 
@@ -25,12 +29,27 @@ export default function ProfilePage() {
     if (!profile?.id) return;
     let cancelled = false;
     (async () => {
-      const { data } = await supabase
-        .from('vehicles')
-        .select('id, number, type')
-        .eq('user_id', profile.id)
-        .order('created_at');
-      if (!cancelled && data) setVehicles(data as VehicleDraft[]);
+      const [{ data: vehiclesData }, { data: familyData }, { data: petsData }] = await Promise.all([
+        supabase
+          .from('vehicles')
+          .select('id, number, type')
+          .eq('user_id', profile.id)
+          .order('created_at'),
+        supabase
+          .from('family_members')
+          .select('id, full_name, relation, gender, age, phone')
+          .eq('user_id', profile.id)
+          .order('created_at'),
+        supabase
+          .from('pets')
+          .select('id, name, species, vaccinated')
+          .eq('user_id', profile.id)
+          .order('created_at'),
+      ]);
+      if (cancelled) return;
+      if (vehiclesData) setVehicles(vehiclesData as VehicleDraft[]);
+      if (familyData) setFamily(familyData as FamilyMemberDraft[]);
+      if (petsData) setPets(petsData as PetDraft[]);
     })();
     return () => { cancelled = true; };
   }, [profile?.id, supabase]);
@@ -142,6 +161,32 @@ export default function ProfilePage() {
           </span>
         </div>
         <VehiclesEditor vehicles={vehicles} onChange={setVehicles} userId={profile?.id} />
+      </div>
+
+      {/* Family Members */}
+      <div className="bg-white rounded-2xl p-4 shadow-sm mb-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1.5">
+            <Users size={12} />Family Members
+          </h3>
+          <span className="text-[10px] font-bold bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">
+            {family.length}
+          </span>
+        </div>
+        <FamilyEditor members={family} onChange={setFamily} userId={profile?.id} />
+      </div>
+
+      {/* Pets */}
+      <div className="bg-white rounded-2xl p-4 shadow-sm mb-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1.5">
+            <PawPrint size={12} />Pets
+          </h3>
+          <span className="text-[10px] font-bold bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">
+            {pets.length}
+          </span>
+        </div>
+        <PetsEditor pets={pets} onChange={setPets} userId={profile?.id} />
       </div>
 
       {/* Notifications */}
