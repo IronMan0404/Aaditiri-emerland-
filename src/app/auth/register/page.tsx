@@ -3,7 +3,6 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
-import { createClient } from '@/lib/supabase';
 import Button from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import AuthShell from '@/components/layout/AuthShell';
@@ -22,8 +21,8 @@ export default function RegisterPage() {
   const [pets, setPets] = useState<PetDraft[]>([]);
   const [loading, setLoading] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [emailDelivered, setEmailDelivered] = useState(true);
   const router = useRouter();
-  const supabase = createClient();
 
   function update(key: string, value: string) { setForm((f) => ({ ...f, [key]: value })); }
 
@@ -39,83 +38,68 @@ export default function RegisterPage() {
     if (form.password.length < 6) { toast.error('Password must be at least 6 characters'); return; }
 
     setLoading(true);
-    // Build the confirmation-link redirect from the current browser origin so
-    // the email link always points at the deployment the user registered on
-    // (Vercel in prod, localhost in dev) instead of the Supabase project's
-    // hard-coded Site URL. The target origin must also be listed under
-    // Authentication -> URL Configuration -> Redirect URLs in Supabase.
-    const emailRedirectTo =
-      typeof window !== 'undefined'
-        ? `${window.location.origin}/auth/callback`
-        : undefined;
 
-    const { data, error } = await supabase.auth.signUp({
-      email: form.email.trim(),
-      password: form.password,
-      options: {
-        emailRedirectTo,
-        data: {
+    // Use our own /api/auth/register endpoint instead of supabase.auth.signUp().
+    // The server route creates the user pre-confirmed via the service-role key
+    // (so Supabase's mailer is never invoked — bypassing its 2/hr rate limit)
+    // and sends the welcome email through Brevo. See the route handler for
+    // the full rationale.
+    let res: Response;
+    try {
+      res = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: form.email.trim(),
+          password: form.password,
           full_name: form.fullName,
+          phone: form.phone,
           flat_number: form.flatNumber,
           resident_type: form.residentType,
-        },
-      },
-    });
-    if (error) { toast.error(error.message); setLoading(false); return; }
-    if (data.user) {
-      await supabase.from('profiles').upsert({
-        id: data.user.id,
-        email: form.email.trim(),
-        full_name: form.fullName,
-        phone: form.phone,
-        flat_number: form.flatNumber,
-        resident_type: form.residentType,
-        role: 'user',
-        is_approved: false,
+          vehicles: vehicles.map((v) => ({ number: v.number, type: v.type })),
+          family: family.map((m) => ({
+            full_name: m.full_name,
+            relation: m.relation,
+            gender: m.gender ?? null,
+            age: m.age ?? null,
+            phone: m.phone ?? null,
+          })),
+          pets: pets.map((p) => ({
+            name: p.name,
+            species: p.species,
+            vaccinated: p.vaccinated,
+          })),
+        }),
       });
-      // Persist any vehicles / family / pets the user added in the form.
-      // Failures here are non-fatal — the account exists and the resident
-      // can add or edit them later from their profile page.
-      const userId = data.user.id;
-
-      if (vehicles.length > 0) {
-        const rows = vehicles.map((v) => ({ user_id: userId, number: v.number, type: v.type }));
-        const { error: vehiclesError } = await supabase.from('vehicles').insert(rows);
-        if (vehiclesError) {
-          toast.error(`Account created, but couldn't save vehicles: ${vehiclesError.message}`);
-        }
-      }
-
-      if (family.length > 0) {
-        const rows = family.map((m) => ({
-          user_id: userId,
-          full_name: m.full_name,
-          relation: m.relation,
-          gender: m.gender ?? null,
-          age: m.age ?? null,
-          phone: m.phone ?? null,
-        }));
-        const { error: familyError } = await supabase.from('family_members').insert(rows);
-        if (familyError) {
-          toast.error(`Account created, but couldn't save family members: ${familyError.message}`);
-        }
-      }
-
-      if (pets.length > 0) {
-        const rows = pets.map((p) => ({
-          user_id: userId,
-          name: p.name,
-          species: p.species,
-          vaccinated: p.vaccinated,
-        }));
-        const { error: petsError } = await supabase.from('pets').insert(rows);
-        if (petsError) {
-          toast.error(`Account created, but couldn't save pets: ${petsError.message}`);
-        }
-      }
-
-      setSubmitted(true);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Network error');
+      setLoading(false);
+      return;
     }
+
+    const payload = (await res.json().catch(() => ({}))) as {
+      ok?: boolean;
+      error?: string;
+      warnings?: string[];
+      email_status?: 'sent' | 'skipped' | 'failed';
+    };
+
+    if (!res.ok || !payload.ok) {
+      toast.error(payload.error || `Registration failed (${res.status})`);
+      setLoading(false);
+      return;
+    }
+
+    // Surface partial-failure warnings (e.g. couldn't save a vehicle row) but
+    // still treat registration as successful — the auth user exists.
+    if (payload.warnings && payload.warnings.length > 0) {
+      toast(`Account created. Some details didn't save: ${payload.warnings.join(', ')}`, {
+        icon: '⚠️',
+      });
+    }
+
+    setEmailDelivered(payload.email_status === 'sent');
+    setSubmitted(true);
     setLoading(false);
   }
 
@@ -127,12 +111,22 @@ export default function RegisterPage() {
             <span className="text-3xl">⏳</span>
           </div>
           <h2 className="text-xl font-bold text-gray-900 mb-2">Registration Submitted!</h2>
-          <p className="text-gray-600 text-sm mb-2">
-            Check your email to verify your address.
+          <p className="text-gray-500 text-sm mb-2">
+            Your account is <strong>pending admin approval</strong>. You&apos;ll be
+            able to sign in once an admin reviews your registration.
           </p>
-          <p className="text-gray-500 text-sm mb-6">
-            Your account is <strong>pending admin approval</strong>. You&apos;ll be able to sign in once an admin reviews your registration.
-          </p>
+          {emailDelivered ? (
+            <p className="text-gray-500 text-xs mb-6">
+              We&apos;ve sent a confirmation email to <strong>{form.email}</strong>.
+              Don&apos;t see it? Check your spam folder.
+            </p>
+          ) : (
+            <p className="text-amber-600 text-xs mb-6">
+              We couldn&apos;t send a confirmation email this time, but your
+              account was still created. Please reach out to an admin if you
+              need help.
+            </p>
+          )}
           <Button onClick={() => router.push('/auth/login')} className="w-full">Go to Login</Button>
         </div>
       </AuthShell>

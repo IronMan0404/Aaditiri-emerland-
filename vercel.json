@@ -4,6 +4,12 @@
   "regions": ["bom1"],
   "buildCommand": "npm run build",
   "installCommand": "npm ci --no-audit --no-fund",
+  "crons": [
+    {
+      "path": "/api/cron/event-reminders",
+      "schedule": "0 * * * *"
+    }
+  ],
   "headers": [
     {
       "source": "/(.*)",
@@ -22,9 +28,16 @@
       ]
     },
     {
-      "source": "/icon-:size.png",
+      "source": "/icon.svg",
       "headers": [
         { "key": "Cache-Control", "value": "public, max-age=86400, immutable" }
+      ]
+    },
+    {
+      "source": "/sw.js",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" },
+        { "key": "Service-Worker-Allowed", "value": "/" }
       ]
     }
   ]

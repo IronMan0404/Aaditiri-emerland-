@@ -245,6 +245,37 @@ create index if not exists bot_message_recipients_message_idx
   on public.bot_message_recipients (message_id);
 
 -- ============================================================
+-- WEB PUSH SUBSCRIPTIONS (one row per device endpoint per user)
+-- A single resident may have several active subscriptions (phone PWA + a
+-- desktop browser, etc.). The browser-issued endpoint is globally unique.
+-- ============================================================
+create table if not exists public.push_subscriptions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  endpoint text not null unique,
+  p256dh text not null,
+  auth text not null,
+  user_agent text,
+  created_at timestamptz not null default now(),
+  last_used_at timestamptz not null default now()
+);
+
+create index if not exists push_subscriptions_user_idx on public.push_subscriptions (user_id);
+
+-- ============================================================
+-- EVENT REMINDER TRACKING
+-- One row per (event, user) marking that we've already sent the 24h
+-- reminder push, so the cron job is idempotent and never spams a user
+-- twice for the same event.
+-- ============================================================
+create table if not exists public.event_reminders_sent (
+  event_id uuid not null references public.events(id) on delete cascade,
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  sent_at timestamptz not null default now(),
+  primary key (event_id, user_id)
+);
+
+-- ============================================================
 -- ROW LEVEL SECURITY (RLS)
 -- ============================================================
 
@@ -261,6 +292,8 @@ alter table public.bot_message_recipients enable row level security;
 alter table public.vehicles enable row level security;
 alter table public.family_members enable row level security;
 alter table public.pets enable row level security;
+alter table public.push_subscriptions enable row level security;
+alter table public.event_reminders_sent enable row level security;
 
 -- PROFILES policies
 -- Idempotent: drop old versions before recreating so re-running this file is safe.
@@ -465,6 +498,41 @@ create policy "Admins can manage any pet"
   to authenticated
   using (exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'))
   with check (exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'));
+
+-- PUSH SUBSCRIPTIONS policies
+-- A user can manage only their own subscriptions; admins can read all so the
+-- cron jobs (running as a privileged service-role client) can fan out, but
+-- regular admin reads are also useful for debugging.
+drop policy if exists "Users can view their own push subscriptions" on public.push_subscriptions;
+drop policy if exists "Users can manage their own push subscriptions" on public.push_subscriptions;
+drop policy if exists "Admins can read all push subscriptions" on public.push_subscriptions;
+
+create policy "Users can view their own push subscriptions"
+  on public.push_subscriptions for select
+  to authenticated
+  using (user_id = auth.uid());
+
+create policy "Users can manage their own push subscriptions"
+  on public.push_subscriptions for all
+  to authenticated
+  using (user_id = auth.uid())
+  with check (user_id = auth.uid());
+
+create policy "Admins can read all push subscriptions"
+  on public.push_subscriptions for select
+  to authenticated
+  using (exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'));
+
+-- EVENT REMINDER TRACKING policies
+-- This table is written exclusively by the server-role cron job; clients
+-- only need to read their own rows so the UI can hide a "Reminder sent"
+-- indicator if we ever want one. Inserts/updates/deletes are blocked at
+-- the policy level (the cron uses the service-role client which bypasses RLS).
+drop policy if exists "Users can read their own reminder receipts" on public.event_reminders_sent;
+create policy "Users can read their own reminder receipts"
+  on public.event_reminders_sent for select
+  to authenticated
+  using (user_id = auth.uid());
 
 -- ============================================================
 -- AUTO-CREATE PROFILE ON SIGN UP

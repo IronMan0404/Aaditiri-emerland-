@@ -30,13 +30,38 @@ export default function BroadcastsPage() {
     e.preventDefault();
     if (!form.title || !form.message) { toast.error('Title and message required'); return; }
     setSaving(true);
-    const { error } = await supabase.from('broadcasts').insert({ ...form, created_by: profile?.id });
+    const { data: inserted, error } = await supabase
+      .from('broadcasts')
+      .insert({ ...form, created_by: profile?.id })
+      .select('id')
+      .single();
     setSaving(false);
     if (error) { toast.error(error.message); return; }
     toast.success('Broadcast sent to all residents!');
     setOpen(false);
     setForm({ title: '', message: '' });
     fetch();
+
+    // Fire-and-forget push fan-out. The DB row is the source of truth — if
+    // push happens to be unconfigured (no VAPID env vars yet) the API just
+    // returns `skipped: 'not_configured'` and we silently move on.
+    if (inserted?.id) {
+      try {
+        const res = await globalThis.fetch('/api/push/broadcast', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ broadcastId: inserted.id }),
+        });
+        const payload = (await res.json().catch(() => ({}))) as {
+          sent?: number; skipped?: string;
+        };
+        if (res.ok && typeof payload.sent === 'number' && payload.sent > 0) {
+          toast.success(`Pushed to ${payload.sent} device${payload.sent === 1 ? '' : 's'}`);
+        }
+      } catch {
+        // Push is best-effort; users still see the broadcast in-app.
+      }
+    }
   }
 
   async function handleDelete(id: string) {
@@ -78,7 +103,16 @@ export default function BroadcastsPage() {
                     <span className="text-xs text-gray-400">{format(new Date(b.created_at), 'dd MMM yyyy, HH:mm')}</span>
                   </div>
                 </div>
-                {isAdmin && <button onClick={() => handleDelete(b.id)} className="text-gray-300 hover:text-red-500 transition-colors mt-1"><Trash2 size={16} /></button>}
+                {isAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(b.id)}
+                    aria-label={`Delete broadcast ${b.title}`}
+                    className="text-gray-300 hover:text-red-500 transition-colors mt-1"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                )}
               </div>
             </div>
           ))}

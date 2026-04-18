@@ -1,14 +1,14 @@
 'use client';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { Megaphone, Calendar, Bookmark, Images, Radio, User, Home, Settings, Newspaper, LogOut, Shield, MessageSquare, Bot, Users } from 'lucide-react';
 import { createClient } from '@/lib/supabase';
 import { useAuth } from '@/hooks/useAuth';
-import { useRouter } from 'next/navigation';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo } from 'react';
 
 const navItems = [
   { href: '/dashboard', icon: Home, label: 'Home' },
+  { href: '/dashboard/news', icon: Newspaper, label: 'News' },
   { href: '/dashboard/announcements', icon: Megaphone, label: 'Announcements' },
   { href: '/dashboard/messages', icon: MessageSquare, label: 'Messages' },
   { href: '/dashboard/community', icon: Users, label: 'Community' },
@@ -29,26 +29,15 @@ const adminItems = [
 
 export default function Sidebar() {
   const pathname = usePathname();
-  const { profile, isAdmin } = useAuth();
+  const { profile, isAdmin, unreadMessages, refreshUnread } = useAuth();
   const router = useRouter();
   const supabase = useMemo(() => createClient(), []);
-  const [unreadMessages, setUnreadMessages] = useState(0);
 
-  useEffect(() => {
-    if (!profile?.id) return;
-    let cancelled = false;
-    async function refresh() {
-      const { count } = await supabase
-        .from('bot_message_recipients')
-        .select('*', { count: 'exact', head: true })
-        .eq('user_id', profile!.id)
-        .is('read_at', null);
-      if (!cancelled) setUnreadMessages(count ?? 0);
-    }
-    refresh();
-    const id = setInterval(refresh, 30000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [profile?.id, supabase, pathname]);
+  // Refresh the badge on route changes so it updates when the user
+  // visits /dashboard/messages and reads a thread. The provider keeps
+  // a 60s background poll going for the case where messages arrive
+  // while the tab is idle.
+  useEffect(() => { refreshUnread(); }, [pathname, refreshUnread]);
 
   async function handleSignOut() {
     await supabase.auth.signOut();
