@@ -20,13 +20,17 @@ export default function ForgotPasswordPage() {
       return;
     }
 
-    // The recovery email link must come back through /auth/callback so the
-    // PKCE code is exchanged for a session cookie before we land on the
-    // reset-password page. The target origin must also be listed under
-    // Authentication -> URL Configuration -> Redirect URLs in Supabase.
+    // Point the recovery email straight at /auth/reset-password. That page
+    // handles the PKCE code exchange (?code=...) and the legacy hash-fragment
+    // flow (#access_token=...&type=recovery) itself, so we don't have to
+    // route through /auth/callback and risk losing the `next` hint when
+    // Supabase's email template strips the query string.
+    //
+    // The target origin must also be listed under Supabase Dashboard ->
+    // Authentication -> URL Configuration -> Redirect URLs.
     const redirectTo =
       typeof window !== 'undefined'
-        ? `${window.location.origin}/auth/callback?next=/auth/reset-password`
+        ? `${window.location.origin}/auth/reset-password`
         : undefined;
 
     setLoading(true);
