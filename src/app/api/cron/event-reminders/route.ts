@@ -5,7 +5,12 @@ import { sendPushToUsers, isPushConfigured } from '@/lib/push';
 // 24-hour event reminder cron.
 //
 // Schedule this on Vercel by adding to vercel.json:
-//   { "crons": [{ "path": "/api/cron/event-reminders", "schedule": "0 * * * *" }] }
+//   { "crons": [{ "path": "/api/cron/event-reminders", "schedule": "30 3 * * *" }] }
+//
+// Vercel Hobby plans only allow daily cron jobs, so we run once a day at
+// 03:30 UTC (09:00 IST, matching the bom1 region). The endpoint is also
+// idempotent (see dedupe ledger below) so it's safe to invoke manually or
+// to run on a more frequent schedule on paid Vercel plans.
 //
 // Vercel signs cron requests with `Authorization: Bearer <CRON_SECRET>` when
 // CRON_SECRET is set in env, so we verify that header to keep the endpoint
@@ -17,8 +22,8 @@ import { sendPushToUsers, isPushConfigured } from '@/lib/push';
 //   3. Skips users we've already sent a reminder to (event_reminders_sent
 //      table is the dedupe ledger), then sends a push and records a row.
 //
-// Running hourly with a 24-48h window means each user gets exactly one
-// reminder per event regardless of how many times the cron fires.
+// The 24-48h window combined with the dedupe ledger means each user gets
+// exactly one reminder per event regardless of how many times the cron fires.
 
 export const dynamic = 'force-dynamic';
 
