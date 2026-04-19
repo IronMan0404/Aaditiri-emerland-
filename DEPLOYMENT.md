@@ -392,3 +392,7 @@ Vercel auto-deploys on push to `main` (~1 minute). The GitHub Actions CI runs in
 | `"AdminLayout" cannot have a negative time stamp` | An async Server Component layout is calling `redirect()`. Move auth gating to `src/proxy.ts` and keep layouts synchronous |
 | `middleware file convention is deprecated` warning | File must be `src/proxy.ts` exporting a `proxy` function (not `middleware`) |
 | Hydration mismatch on dashboard | Gate dynamic values on the `mounted` flag from `useAuth()`; add `suppressHydrationWarning` on the single affected element |
+
+
+
+
