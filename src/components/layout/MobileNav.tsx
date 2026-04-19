@@ -24,6 +24,8 @@ const moreRoutes = [
   '/dashboard/announcements',
   '/dashboard/messages',
   '/dashboard/community',
+  '/dashboard/clubhouse',
+  '/dashboard/issues',
   '/dashboard/profile',
 ];
 

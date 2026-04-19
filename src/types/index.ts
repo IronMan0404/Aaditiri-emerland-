@@ -144,3 +144,152 @@ export interface BotMessageRecipient {
   created_at: string;
   bot_messages?: BotMessage;
 }
+
+// ============================================================
+// Issues (community ticket tracker)
+// ============================================================
+
+export type IssueCategory =
+  | 'plumbing'
+  | 'electrical'
+  | 'housekeeping'
+  | 'security'
+  | 'lift'
+  | 'garden'
+  | 'pest_control'
+  | 'internet'
+  | 'other';
+
+export type IssuePriority = 'low' | 'normal' | 'high' | 'urgent';
+
+export type IssueStatus = 'todo' | 'in_progress' | 'resolved' | 'closed';
+
+export interface Issue {
+  id: string;
+  created_by: string;
+  title: string;
+  description: string;
+  category: IssueCategory;
+  priority: IssuePriority;
+  status: IssueStatus;
+  assigned_to: string | null;
+  flat_number: string | null;
+  created_at: string;
+  updated_at: string;
+  resolved_at: string | null;
+  closed_at: string | null;
+  // Joined relations \u2014 optional because not every query selects them.
+  profiles?: { full_name: string; flat_number?: string | null };
+  assignee?: { full_name: string } | null;
+}
+
+export interface IssueComment {
+  id: string;
+  issue_id: string;
+  author_id: string;
+  body: string;
+  is_internal: boolean;
+  created_at: string;
+  profiles?: { full_name: string; role?: 'admin' | 'user' };
+}
+
+export interface IssueStatusEvent {
+  id: string;
+  issue_id: string;
+  from_status: IssueStatus | null;
+  to_status: IssueStatus;
+  changed_by: string | null;
+  changed_at: string;
+}
+
+// ============================================================
+// Clubhouse subscriptions / facilities / passes
+// ============================================================
+
+export interface ClubhouseFacility {
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  hourly_rate: number;
+  pass_rate_per_visit: number;
+  requires_subscription: boolean;
+  is_bookable: boolean;
+  is_active: boolean;
+  display_order: number;
+  created_at: string;
+}
+
+export interface ClubhouseTier {
+  id: string;
+  name: string;
+  description: string | null;
+  monthly_price: number;
+  yearly_price: number | null;
+  // Facility slugs included in this tier.
+  included_facilities: string[];
+  // Null = unlimited.
+  pass_quota_per_month: number | null;
+  max_pass_duration_hours: number;
+  is_active: boolean;
+  display_order: number;
+  created_at: string;
+}
+
+export type ClubhouseSubscriptionStatus =
+  | 'pending_approval'
+  | 'active'
+  | 'expiring'
+  | 'expired'
+  | 'cancelled'
+  | 'rejected';
+
+// Months a resident may pick when requesting a subscription.
+// Mirrored in the DB check constraint; keep in sync.
+export type ClubhouseRequestMonths = 1 | 3 | 6 | 12;
+
+export interface ClubhouseSubscription {
+  id: string;
+  flat_number: string;
+  tier_id: string;
+  primary_user_id: string;
+  start_date: string;
+  end_date: string;
+  status: ClubhouseSubscriptionStatus;
+  // Resident-initiated request metadata. NULL for admin backfills.
+  requested_months: ClubhouseRequestMonths | null;
+  requested_at: string | null;
+  request_notes: string | null;
+  // Approval audit. Filled when status transitions pending_approval -> active.
+  approved_by: string | null;
+  approved_at: string | null;
+  rejected_reason: string | null;
+  cancelled_at: string | null;
+  cancelled_reason: string | null;
+  created_at: string;
+  updated_at: string;
+  // Optional joined data.
+  clubhouse_tiers?: ClubhouseTier;
+  primary_user?: { full_name: string; email: string; phone?: string | null };
+}
+
+export type ClubhousePassStatus = 'active' | 'used' | 'expired' | 'revoked';
+
+export interface ClubhousePass {
+  id: string;
+  code: string;
+  qr_payload: string;
+  subscription_id: string;
+  flat_number: string;
+  issued_to: string;
+  facility_id: string;
+  valid_from: string;
+  valid_until: string;
+  status: ClubhousePassStatus;
+  used_at: string | null;
+  validated_by: string | null;
+  created_at: string;
+  // Optional joined data.
+  clubhouse_facilities?: Pick<ClubhouseFacility, 'id' | 'slug' | 'name'>;
+  profiles?: { full_name: string; flat_number?: string | null };
+}

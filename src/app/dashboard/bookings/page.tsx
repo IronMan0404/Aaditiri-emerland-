@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { Plus, Clock, MapPin, AlertTriangle, Ban } from 'lucide-react';
+import { Plus, Clock, MapPin, AlertTriangle, Ban, Lock } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { createClient } from '@/lib/supabase';
 import { useAuth } from '@/hooks/useAuth';
@@ -8,7 +8,7 @@ import Modal from '@/components/ui/Modal';
 import Button from '@/components/ui/Button';
 import { Input, Textarea } from '@/components/ui/Input';
 import { format } from 'date-fns';
-import type { Booking } from '@/types';
+import type { Booking, ClubhouseFacility } from '@/types';
 
 type AdminAction = 'revoke' | 'reject';
 
@@ -17,7 +17,9 @@ const ADMIN_ACTION_META: Record<AdminAction, { targetStatus: 'cancelled' | 'reje
   reject:  { targetStatus: 'rejected',  verb: 'Reject',  pastTense: 'rejected', noteLabel: 'Rejected by admin' },
 };
 
-const FACILITIES = ['Clubhouse', 'Swimming Pool', 'Tennis Court', 'Badminton Court', 'Gym', 'Party Hall', 'Conference Room'];
+// Facility list now comes from the clubhouse_facilities table (admin-managed,
+// see /admin/clubhouse). Time slots are still hard-coded \u2014 admins can
+// move that to a table later if they need per-facility schedules.
 const TIME_SLOTS = ['6:00 AM - 8:00 AM', '8:00 AM - 10:00 AM', '10:00 AM - 12:00 PM', '12:00 PM - 2:00 PM', '2:00 PM - 4:00 PM', '4:00 PM - 6:00 PM', '6:00 PM - 8:00 PM', '8:00 PM - 10:00 PM'];
 
 const STATUS = { pending: 'bg-amber-100 text-amber-700', approved: 'bg-green-100 text-green-700', rejected: 'bg-red-100 text-red-700', cancelled: 'bg-gray-100 text-gray-500' };
@@ -25,10 +27,12 @@ const STATUS = { pending: 'bg-amber-100 text-amber-700', approved: 'bg-green-100
 export default function BookingsPage() {
   const { profile, isAdmin } = useAuth();
   const [bookings, setBookings] = useState<Booking[]>([]);
+  const [facilities, setFacilities] = useState<ClubhouseFacility[]>([]);
+  const [activeTierFacilitySlugs, setActiveTierFacilitySlugs] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<'my' | 'all'>('my');
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ facility: '', date: '', time_slot: '', notes: '' });
+  const [form, setForm] = useState({ facility_id: '', date: '', time_slot: '', notes: '' });
   const [saving, setSaving] = useState(false);
 
   const [adminTarget, setAdminTarget] = useState<Booking | null>(null);
@@ -47,17 +51,56 @@ export default function BookingsPage() {
   };
   useEffect(() => { fetch(); }, [view]);
 
+  // Load the facility catalog + the resident's active subscription so we can
+  // render a "Locked" badge on facilities they can't book today.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const [{ data: fac }, { data: sub }] = await Promise.all([
+        supabase.from('clubhouse_facilities').select('*').eq('is_active', true).eq('is_bookable', true).order('display_order'),
+        profile?.flat_number
+          ? supabase
+              .from('clubhouse_subscriptions')
+              .select('clubhouse_tiers(included_facilities)')
+              .eq('flat_number', profile.flat_number)
+              .eq('status', 'active')
+              .maybeSingle()
+          : Promise.resolve({ data: null }),
+      ]);
+      if (cancelled) return;
+      setFacilities((fac ?? []) as ClubhouseFacility[]);
+      const slugs = ((sub?.clubhouse_tiers as { included_facilities?: string[] } | null)?.included_facilities ?? []);
+      setActiveTierFacilitySlugs(new Set(slugs));
+    })();
+    return () => { cancelled = true; };
+  }, [profile?.flat_number, supabase]);
+
+  function isFacilityLocked(f: ClubhouseFacility): boolean {
+    return f.requires_subscription && !activeTierFacilitySlugs.has(f.slug);
+  }
+
   async function handleBook(e: React.FormEvent) {
     e.preventDefault();
-    if (!form.facility || !form.date || !form.time_slot) { toast.error('Fill all required fields'); return; }
+    if (!form.facility_id || !form.date || !form.time_slot) { toast.error('Fill all required fields'); return; }
     setSaving(true);
-    const { error } = await supabase.from('bookings').insert({ ...form, user_id: profile?.id, status: 'pending' });
-    setSaving(false);
-    if (error) { toast.error(error.message); return; }
-    toast.success('Booking request submitted!');
-    setOpen(false);
-    setForm({ facility: '', date: '', time_slot: '', notes: '' });
-    fetch();
+    try {
+      const res = await globalThis.fetch('/api/bookings', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(form),
+      });
+      const json = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) {
+        toast.error(json.error ?? `Booking failed (${res.status})`);
+        return;
+      }
+      toast.success('Booking request submitted!');
+      setOpen(false);
+      setForm({ facility_id: '', date: '', time_slot: '', notes: '' });
+      fetch();
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function updateStatus(id: string, status: string) {
@@ -220,11 +263,39 @@ export default function BookingsPage() {
         <form onSubmit={handleBook} className="space-y-4">
           <div>
             <label className="text-sm font-medium text-gray-700 mb-2 block">Select Facility *</label>
-            <div className="flex flex-wrap gap-2">
-              {FACILITIES.map((f) => (
-                <button key={f} type="button" onClick={() => setForm({ ...form, facility: f })} className={`px-3 py-1.5 rounded-xl text-sm font-medium border transition-all ${form.facility === f ? 'bg-[#1B5E20] text-white border-[#1B5E20]' : 'bg-white text-gray-700 border-gray-200 hover:border-[#1B5E20]'}`}>{f}</button>
-              ))}
-            </div>
+            {facilities.length === 0 ? (
+              <p className="text-xs text-gray-400 italic">No bookable facilities available.</p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {facilities.map((f) => {
+                  const locked = isFacilityLocked(f);
+                  const selected = form.facility_id === f.id;
+                  return (
+                    <button
+                      key={f.id}
+                      type="button"
+                      onClick={() => {
+                        if (locked) {
+                          toast.error(`${f.name} requires an active clubhouse subscription that includes it.`);
+                          return;
+                        }
+                        setForm({ ...form, facility_id: f.id });
+                      }}
+                      className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-xl text-sm font-medium border transition-all ${
+                        selected
+                          ? 'bg-[#1B5E20] text-white border-[#1B5E20]'
+                          : locked
+                            ? 'bg-gray-50 text-gray-400 border-gray-200 cursor-not-allowed'
+                            : 'bg-white text-gray-700 border-gray-200 hover:border-[#1B5E20]'
+                      }`}
+                    >
+                      {locked && <Lock size={11} />}
+                      {f.name}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
           <Input label="Date *" type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} min={new Date().toISOString().split('T')[0]} />
           <div>

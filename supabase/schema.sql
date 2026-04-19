@@ -539,7 +539,7 @@ create policy "Users can read their own reminder receipts"
 -- ============================================================
 create or replace function public.handle_new_user()
 returns trigger language plpgsql security definer set search_path = public
-as $$
+as $func$
 begin
   insert into public.profiles (id, email, full_name, flat_number, role, is_approved)
   values (
@@ -553,7 +553,7 @@ begin
   on conflict (id) do nothing;
   return new;
 end;
-$$;
+$func$;
 
 drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created
@@ -606,6 +606,492 @@ update public.profiles
        role        = 'admin',
        is_approved = true
  where email = 'bot@aaditri-emerland.local';
+
+-- ============================================================
+-- ISSUES (community ticket tracker) - 2026-04-20
+-- Mirrors supabase/migrations/20260420_tickets_clubhouse.sql section 1.
+-- Kept here for fresh installs; the migration is the source of truth for
+-- incremental upgrades on existing databases.
+-- ============================================================
+create table if not exists public.issues (
+  id uuid primary key default gen_random_uuid(),
+  created_by uuid not null references public.profiles(id) on delete cascade,
+  title text not null,
+  description text not null,
+  category text not null check (category in (
+    'plumbing', 'electrical', 'housekeeping', 'security',
+    'lift', 'garden', 'pest_control', 'internet', 'other'
+  )),
+  priority text not null default 'normal' check (priority in ('low', 'normal', 'high', 'urgent')),
+  status text not null default 'todo' check (status in ('todo', 'in_progress', 'resolved', 'closed')),
+  assigned_to uuid references public.profiles(id) on delete set null,
+  flat_number text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  resolved_at timestamptz,
+  closed_at timestamptz
+);
+
+create index if not exists issues_status_created_idx on public.issues (status, created_at desc);
+create index if not exists issues_category_idx on public.issues (category);
+create index if not exists issues_created_by_idx on public.issues (created_by);
+
+create table if not exists public.issue_comments (
+  id uuid primary key default gen_random_uuid(),
+  issue_id uuid not null references public.issues(id) on delete cascade,
+  author_id uuid not null references public.profiles(id) on delete cascade,
+  body text not null,
+  is_internal boolean not null default false,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists issue_comments_issue_idx on public.issue_comments (issue_id, created_at);
+
+create table if not exists public.issue_status_events (
+  id uuid primary key default gen_random_uuid(),
+  issue_id uuid not null references public.issues(id) on delete cascade,
+  from_status text,
+  to_status text not null,
+  changed_by uuid references public.profiles(id) on delete set null,
+  changed_at timestamptz not null default now()
+);
+
+create index if not exists issue_status_events_changed_idx on public.issue_status_events (changed_at);
+create index if not exists issue_status_events_issue_idx on public.issue_status_events (issue_id, changed_at);
+
+create or replace function public.issues_status_event_trigger()
+returns trigger language plpgsql security definer set search_path = public
+as $func$
+begin
+  if (tg_op = 'INSERT') then
+    insert into public.issue_status_events (issue_id, from_status, to_status, changed_by)
+      values (new.id, null, new.status, new.created_by);
+    return new;
+  end if;
+  if (tg_op = 'UPDATE') then
+    if (new.status is distinct from old.status) then
+      insert into public.issue_status_events (issue_id, from_status, to_status, changed_by)
+        values (new.id, old.status, new.status, auth.uid());
+      if (new.status = 'resolved' and new.resolved_at is null) then new.resolved_at := now(); end if;
+      if (new.status = 'closed' and new.closed_at is null) then new.closed_at := now(); end if;
+    end if;
+    new.updated_at := now();
+    return new;
+  end if;
+  return null;
+end;
+$func$;
+
+drop trigger if exists trg_issues_status_event on public.issues;
+create trigger trg_issues_status_event
+  before insert or update on public.issues
+  for each row execute procedure public.issues_status_event_trigger();
+
+-- ============================================================
+-- CLUBHOUSE FACILITIES / TIERS / SUBSCRIPTIONS / PASSES - 2026-04-20
+-- See migration 20260420_tickets_clubhouse.sql sections 2-5 for full notes.
+-- ============================================================
+create table if not exists public.clubhouse_facilities (
+  id uuid primary key default gen_random_uuid(),
+  slug text not null unique,
+  name text not null,
+  description text,
+  hourly_rate numeric(10, 2) not null default 0,
+  pass_rate_per_visit numeric(10, 2) not null default 0,
+  requires_subscription boolean not null default false,
+  is_bookable boolean not null default true,
+  is_active boolean not null default true,
+  display_order integer not null default 0,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists clubhouse_facilities_active_idx
+  on public.clubhouse_facilities (is_active, display_order);
+
+insert into public.clubhouse_facilities (slug, name, requires_subscription, display_order)
+values
+  ('clubhouse',       'Clubhouse',       false, 10),
+  ('swimming_pool',   'Swimming Pool',   true,  20),
+  ('tennis_court',    'Tennis Court',    false, 30),
+  ('badminton_court', 'Badminton Court', false, 40),
+  ('gym',             'Gym',             true,  50),
+  ('yoga_room',       'Yoga Room',       true,  60),
+  ('party_hall',      'Party Hall',      false, 70),
+  ('conference_room', 'Conference Room', false, 80)
+on conflict (slug) do nothing;
+
+create table if not exists public.clubhouse_tiers (
+  id uuid primary key default gen_random_uuid(),
+  name text not null unique,
+  description text,
+  monthly_price numeric(10, 2) not null,
+  yearly_price numeric(10, 2),
+  included_facilities text[] not null default '{}'::text[],
+  pass_quota_per_month integer,
+  max_pass_duration_hours integer not null default 168,
+  is_active boolean not null default true,
+  display_order integer not null default 0,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists clubhouse_tiers_active_idx
+  on public.clubhouse_tiers (is_active, display_order);
+
+create table if not exists public.clubhouse_subscriptions (
+  id uuid primary key default gen_random_uuid(),
+  flat_number text not null,
+  tier_id uuid not null references public.clubhouse_tiers(id) on delete restrict,
+  primary_user_id uuid not null references public.profiles(id) on delete cascade,
+  start_date date not null,
+  end_date date not null,
+  status text not null default 'active'
+    check (status in ('pending_approval', 'active', 'expiring', 'expired', 'cancelled', 'rejected')),
+  -- Resident-initiated request metadata. NULL for admin-created
+  -- subscriptions (which are still allowed for backfills).
+  requested_months integer
+    check (requested_months is null or requested_months in (1, 3, 6, 12)),
+  requested_at timestamptz,
+  request_notes text,
+  -- Approval audit. Filled when status transitions pending_approval -> active.
+  approved_by uuid references public.profiles(id) on delete set null,
+  approved_at timestamptz,
+  rejected_reason text,
+  cancelled_at timestamptz,
+  cancelled_reason text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  -- Date sanity only enforced once the subscription has real
+  -- start/end dates; pending requests can have placeholder dates.
+  constraint clubhouse_subscriptions_active_dates_check check (
+    status in ('pending_approval', 'rejected', 'cancelled')
+    or end_date >= start_date
+  )
+);
+
+create unique index if not exists clubhouse_subscriptions_one_active_per_flat
+  on public.clubhouse_subscriptions (flat_number)
+  where status = 'active';
+-- One pending request per flat at a time so a resident can't
+-- spam-create requests by mashing the Subscribe button.
+create unique index if not exists clubhouse_subscriptions_one_pending_per_flat
+  on public.clubhouse_subscriptions (flat_number)
+  where status = 'pending_approval';
+create index if not exists clubhouse_subscriptions_status_idx
+  on public.clubhouse_subscriptions (status, end_date);
+create index if not exists clubhouse_subscriptions_flat_idx
+  on public.clubhouse_subscriptions (flat_number);
+
+create table if not exists public.clubhouse_subscription_events (
+  id uuid primary key default gen_random_uuid(),
+  subscription_id uuid not null references public.clubhouse_subscriptions(id) on delete cascade,
+  flat_number text not null,
+  from_status text,
+  to_status text not null,
+  changed_by uuid references public.profiles(id) on delete set null,
+  changed_at timestamptz not null default now()
+);
+
+create index if not exists clubhouse_subscription_events_changed_idx
+  on public.clubhouse_subscription_events (changed_at);
+create index if not exists clubhouse_subscription_events_sub_idx
+  on public.clubhouse_subscription_events (subscription_id, changed_at);
+
+create or replace function public.clubhouse_subscriptions_event_trigger()
+returns trigger language plpgsql security definer set search_path = public
+as $func$
+begin
+  if (tg_op = 'INSERT') then
+    insert into public.clubhouse_subscription_events
+      (subscription_id, flat_number, from_status, to_status, changed_by)
+      values (new.id, new.flat_number, null, new.status, auth.uid());
+    return new;
+  end if;
+  if (tg_op = 'UPDATE') then
+    if (new.status is distinct from old.status) then
+      insert into public.clubhouse_subscription_events
+        (subscription_id, flat_number, from_status, to_status, changed_by)
+        values (new.id, new.flat_number, old.status, new.status, auth.uid());
+      if (new.status = 'active' and old.status = 'pending_approval' and new.approved_at is null) then
+        new.approved_at := now();
+        if (new.approved_by is null) then new.approved_by := auth.uid(); end if;
+      end if;
+      if (new.status = 'cancelled' and new.cancelled_at is null) then new.cancelled_at := now(); end if;
+    end if;
+    new.updated_at := now();
+    return new;
+  end if;
+  return null;
+end;
+$func$;
+
+drop trigger if exists trg_clubhouse_subscriptions_event on public.clubhouse_subscriptions;
+create trigger trg_clubhouse_subscriptions_event
+  before insert or update on public.clubhouse_subscriptions
+  for each row execute procedure public.clubhouse_subscriptions_event_trigger();
+
+create table if not exists public.clubhouse_subscription_notices_sent (
+  subscription_id uuid not null references public.clubhouse_subscriptions(id) on delete cascade,
+  notice_kind text not null check (notice_kind in ('expiring', 'expired')),
+  sent_at timestamptz not null default now(),
+  primary key (subscription_id, notice_kind)
+);
+
+create table if not exists public.clubhouse_passes (
+  id uuid primary key default gen_random_uuid(),
+  code text not null unique,
+  qr_payload text not null,
+  subscription_id uuid not null references public.clubhouse_subscriptions(id) on delete cascade,
+  flat_number text not null,
+  issued_to uuid not null references public.profiles(id) on delete cascade,
+  facility_id uuid not null references public.clubhouse_facilities(id) on delete restrict,
+  valid_from timestamptz not null,
+  valid_until timestamptz not null,
+  status text not null default 'active'
+    check (status in ('active', 'used', 'expired', 'revoked')),
+  used_at timestamptz,
+  validated_by uuid references public.profiles(id) on delete set null,
+  created_at timestamptz not null default now(),
+  check (valid_until > valid_from)
+);
+
+create index if not exists clubhouse_passes_status_idx
+  on public.clubhouse_passes (status, valid_until);
+create index if not exists clubhouse_passes_subscription_idx
+  on public.clubhouse_passes (subscription_id, created_at);
+create index if not exists clubhouse_passes_facility_idx
+  on public.clubhouse_passes (facility_id, created_at);
+
+-- Uses scalar variables instead of %ROWTYPE because the Supabase SQL Editor
+-- can misparse rowtype-typed locals on paste, raising a misleading
+-- "relation \"sub_row\" does not exist" error.
+create or replace function public.clubhouse_passes_enforce_quota()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $func$
+declare
+  v_status            text;
+  v_end_date          date;
+  v_tier_id           uuid;
+  v_tier_name         text;
+  v_included          text[];
+  v_max_hours         integer;
+  v_quota             integer;
+  v_facility_slug     text;
+  v_used_this_month   integer;
+  v_duration_hours    numeric;
+begin
+  select status, end_date, tier_id
+    into v_status, v_end_date, v_tier_id
+    from public.clubhouse_subscriptions
+   where id = new.subscription_id;
+
+  if not found then raise exception 'Subscription not found'; end if;
+  if v_status <> 'active' then raise exception 'Subscription is not active (status=%)', v_status; end if;
+  if current_date > v_end_date then raise exception 'Subscription has expired'; end if;
+
+  select name, included_facilities, max_pass_duration_hours, pass_quota_per_month
+    into v_tier_name, v_included, v_max_hours, v_quota
+    from public.clubhouse_tiers
+   where id = v_tier_id;
+
+  if not found then raise exception 'Subscription tier not found'; end if;
+
+  select slug into v_facility_slug
+    from public.clubhouse_facilities
+   where id = new.facility_id;
+
+  if v_facility_slug is null then raise exception 'Facility not found'; end if;
+  if not (v_facility_slug = any (v_included)) then
+    raise exception 'Facility % is not included in tier %', v_facility_slug, v_tier_name;
+  end if;
+
+  v_duration_hours := extract(epoch from (new.valid_until - new.valid_from)) / 3600.0;
+  if v_duration_hours > v_max_hours then
+    raise exception 'Pass duration (% h) exceeds tier maximum (% h)', v_duration_hours, v_max_hours;
+  end if;
+
+  if v_quota is not null then
+    select count(*) into v_used_this_month
+      from public.clubhouse_passes p
+     where p.subscription_id = new.subscription_id
+       and p.status <> 'revoked'
+       and date_trunc('month', p.created_at) = date_trunc('month', now());
+    if v_used_this_month >= v_quota then
+      raise exception 'Monthly pass quota (%) reached for this subscription', v_quota;
+    end if;
+  end if;
+  return new;
+end;
+$func$;
+
+drop trigger if exists trg_clubhouse_passes_enforce_quota on public.clubhouse_passes;
+create trigger trg_clubhouse_passes_enforce_quota
+  before insert on public.clubhouse_passes
+  for each row execute procedure public.clubhouse_passes_enforce_quota();
+
+-- RLS for the issues + clubhouse tables (mirrors migration section 6).
+alter table public.issues                              enable row level security;
+alter table public.issue_comments                      enable row level security;
+alter table public.issue_status_events                 enable row level security;
+alter table public.clubhouse_facilities                enable row level security;
+alter table public.clubhouse_tiers                     enable row level security;
+alter table public.clubhouse_subscriptions             enable row level security;
+alter table public.clubhouse_subscription_events       enable row level security;
+alter table public.clubhouse_subscription_notices_sent enable row level security;
+alter table public.clubhouse_passes                    enable row level security;
+
+drop policy if exists "Users can view their own issues or admins all"   on public.issues;
+drop policy if exists "Users can create their own issues"               on public.issues;
+drop policy if exists "Users update own todo issues, admins update any" on public.issues;
+drop policy if exists "Admins can delete issues"                        on public.issues;
+
+create policy "Users can view their own issues or admins all"
+  on public.issues for select to authenticated
+  using (created_by = auth.uid() or exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'));
+create policy "Users can create their own issues"
+  on public.issues for insert to authenticated with check (created_by = auth.uid());
+create policy "Users update own todo issues, admins update any"
+  on public.issues for update to authenticated
+  using ((created_by = auth.uid() and status = 'todo') or exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'))
+  with check ((created_by = auth.uid() and status = 'todo') or exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'));
+create policy "Admins can delete issues"
+  on public.issues for delete to authenticated
+  using (exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'));
+
+drop policy if exists "Comments visible to issue parties"   on public.issue_comments;
+drop policy if exists "Comments insertable by issue parties" on public.issue_comments;
+drop policy if exists "Comments deletable by author or admin" on public.issue_comments;
+
+create policy "Comments visible to issue parties"
+  on public.issue_comments for select to authenticated
+  using (
+    exists (
+      select 1 from public.issues i
+      where i.id = issue_comments.issue_id
+        and ((i.created_by = auth.uid() and issue_comments.is_internal = false)
+             or exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'))
+    )
+  );
+create policy "Comments insertable by issue parties"
+  on public.issue_comments for insert to authenticated
+  with check (
+    author_id = auth.uid() and exists (
+      select 1 from public.issues i
+      where i.id = issue_comments.issue_id
+        and ((i.created_by = auth.uid() and issue_comments.is_internal = false)
+             or exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'))
+    )
+  );
+create policy "Comments deletable by author or admin"
+  on public.issue_comments for delete to authenticated
+  using (author_id = auth.uid() or exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'));
+
+drop policy if exists "Status events visible to issue parties" on public.issue_status_events;
+create policy "Status events visible to issue parties"
+  on public.issue_status_events for select to authenticated
+  using (
+    exists (
+      select 1 from public.issues i
+      where i.id = issue_status_events.issue_id
+        and (i.created_by = auth.uid() or exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'))
+    )
+  );
+
+drop policy if exists "Facilities readable by all authenticated" on public.clubhouse_facilities;
+drop policy if exists "Admins manage facilities"                 on public.clubhouse_facilities;
+create policy "Facilities readable by all authenticated"
+  on public.clubhouse_facilities for select to authenticated using (true);
+create policy "Admins manage facilities"
+  on public.clubhouse_facilities for all to authenticated
+  using (exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'))
+  with check (exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'));
+
+drop policy if exists "Tiers readable by all authenticated" on public.clubhouse_tiers;
+drop policy if exists "Admins manage tiers"                 on public.clubhouse_tiers;
+create policy "Tiers readable by all authenticated"
+  on public.clubhouse_tiers for select to authenticated using (true);
+create policy "Admins manage tiers"
+  on public.clubhouse_tiers for all to authenticated
+  using (exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'))
+  with check (exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'));
+
+drop policy if exists "Residents view own flat subscription, admins all" on public.clubhouse_subscriptions;
+drop policy if exists "Residents request own subscription"               on public.clubhouse_subscriptions;
+drop policy if exists "Admins manage subscriptions"                      on public.clubhouse_subscriptions;
+create policy "Residents view own flat subscription, admins all"
+  on public.clubhouse_subscriptions for select to authenticated
+  using (
+    flat_number in (select flat_number from public.profiles where id = auth.uid())
+    or exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
+  );
+-- Residents may insert ONLY a pending_approval row for their own flat,
+-- naming themselves as primary user and leaving all approval columns null.
+create policy "Residents request own subscription"
+  on public.clubhouse_subscriptions for insert to authenticated
+  with check (
+    primary_user_id = auth.uid()
+    and status = 'pending_approval'
+    and approved_by is null
+    and approved_at is null
+    and rejected_reason is null
+    and flat_number in (select flat_number from public.profiles where id = auth.uid())
+  );
+create policy "Admins manage subscriptions"
+  on public.clubhouse_subscriptions for all to authenticated
+  using (exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'))
+  with check (exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'));
+
+drop policy if exists "Sub events readable by residents on own flat or admins" on public.clubhouse_subscription_events;
+create policy "Sub events readable by residents on own flat or admins"
+  on public.clubhouse_subscription_events for select to authenticated
+  using (
+    flat_number in (select flat_number from public.profiles where id = auth.uid())
+    or exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
+  );
+
+drop policy if exists "Residents read own notice receipts" on public.clubhouse_subscription_notices_sent;
+create policy "Residents read own notice receipts"
+  on public.clubhouse_subscription_notices_sent for select to authenticated
+  using (
+    exists (
+      select 1 from public.clubhouse_subscriptions s
+      where s.id = clubhouse_subscription_notices_sent.subscription_id
+        and (s.flat_number in (select flat_number from public.profiles where id = auth.uid())
+             or exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'))
+    )
+  );
+
+drop policy if exists "Passes readable by own flat or admins"   on public.clubhouse_passes;
+drop policy if exists "Passes insertable by own flat residents" on public.clubhouse_passes;
+drop policy if exists "Admins update or delete passes"          on public.clubhouse_passes;
+create policy "Passes readable by own flat or admins"
+  on public.clubhouse_passes for select to authenticated
+  using (
+    flat_number in (select flat_number from public.profiles where id = auth.uid())
+    or exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
+  );
+create policy "Passes insertable by own flat residents"
+  on public.clubhouse_passes for insert to authenticated
+  with check (
+    issued_to = auth.uid()
+    and flat_number in (select flat_number from public.profiles where id = auth.uid())
+  );
+create policy "Admins update or delete passes"
+  on public.clubhouse_passes for update to authenticated
+  using (exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'))
+  with check (exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'));
+
+insert into public.clubhouse_tiers (
+  name, description, monthly_price, yearly_price,
+  included_facilities, pass_quota_per_month, max_pass_duration_hours, display_order
+)
+values
+  ('Basic',    'Pool + party hall access',           500,  5000,  array['swimming_pool','party_hall'],                                                                           20,   24,  10),
+  ('Premium',  'Pool, gym, yoga, party hall',        1000, 10000, array['swimming_pool','gym','yoga_room','party_hall'],                                                         40,   24,  20),
+  ('Platinum', 'All facilities, unlimited passes',   1500, 15000, array['swimming_pool','gym','yoga_room','party_hall','tennis_court','badminton_court','clubhouse','conference_room'], null, 168, 30)
+on conflict (name) do nothing;
 
 -- ============================================================
 -- REFRESH POSTGREST SCHEMA CACHE

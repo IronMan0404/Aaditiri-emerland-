@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
-import { MapPin, Search, X, Loader2, LocateFixed, Check } from 'lucide-react';
-import type { ResolvedLocation } from '@/hooks/useGeoLocation';
+import { MapPin, Search, X, Loader2, LocateFixed, Check, AlertTriangle } from 'lucide-react';
+import { describeDenial, type GeoDenialReason, type ResolvedLocation } from '@/hooks/useGeoLocation';
 
 interface SearchHit {
   city: string;
@@ -15,6 +15,8 @@ interface SearchHit {
 interface Props {
   current: ResolvedLocation;
   status: 'loading' | 'ready' | 'denied' | 'error';
+  // Why the last detection attempt failed, if any. Drives the inline help text.
+  denialReason?: GeoDenialReason;
   onPickCoords: (loc: Omit<ResolvedLocation, 'source'>) => void;
   onUseGeolocation: () => void;
   onReset: () => void;
@@ -23,7 +25,8 @@ interface Props {
 // A small \ud83d\udccd pill that shows the current city, and opens a popover with a
 // city-search box + a "use my location" button. Designed to feel like
 // Google's location picker but smaller \u2014 fits in the page header.
-export default function LocationPicker({ current, status, onPickCoords, onUseGeolocation, onReset }: Props) {
+export default function LocationPicker({ current, status, denialReason, onPickCoords, onUseGeolocation, onReset }: Props) {
+  const denialMessage = describeDenial(denialReason ?? null);
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
   const [hits, setHits] = useState<SearchHit[]>([]);
@@ -99,6 +102,22 @@ export default function LocationPicker({ current, status, onPickCoords, onUseGeo
               <LocateFixed size={14} />
               Use my current location
             </button>
+
+            {denialMessage && (
+              <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-[11px] leading-snug text-amber-900">
+                <AlertTriangle size={12} className="shrink-0 mt-0.5 text-amber-600" />
+                <div className="flex-1">
+                  <p>{denialMessage}</p>
+                  <button
+                    type="button"
+                    onClick={() => { onUseGeolocation(); }}
+                    className="mt-1 font-semibold text-amber-700 hover:text-amber-900 underline"
+                  >
+                    Try again
+                  </button>
+                </div>
+              </div>
+            )}
 
             <div className="relative">
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
