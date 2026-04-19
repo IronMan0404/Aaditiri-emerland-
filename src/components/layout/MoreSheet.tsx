@@ -2,7 +2,7 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useMemo } from 'react';
-import { Megaphone, MessageSquare, Users, User, LogOut, Shield, X, Newspaper } from 'lucide-react';
+import { Megaphone, MessageSquare, Users, User, LogOut, Shield, X, Newspaper, AlertCircle, KeyRound } from 'lucide-react';
 import { createClient } from '@/lib/supabase';
 import { useAuth } from '@/hooks/useAuth';
 
@@ -35,6 +35,8 @@ export default function MoreSheet({ open, onClose }: MoreSheetProps) {
     { href: '/dashboard/announcements', icon: Megaphone, label: 'Announcements', desc: 'Society notices from admin' },
     { href: '/dashboard/messages', icon: MessageSquare, label: 'Inbox', desc: 'Direct messages from admin', badge: unreadMessages },
     { href: '/dashboard/community', icon: Users, label: 'Community', desc: 'Residents directory' },
+    { href: '/dashboard/clubhouse', icon: KeyRound, label: 'Clubhouse', desc: 'Subscription, facilities & passes' },
+    { href: '/dashboard/issues', icon: AlertCircle, label: 'Issues', desc: 'Report a problem & track tickets' },
     { href: '/dashboard/profile', icon: User, label: 'Profile', desc: 'Your account & family' },
   ];
 

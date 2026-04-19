@@ -53,6 +53,7 @@ export default function NewsPage() {
           <LocationPicker
             current={geo.location}
             status={geo.status}
+            denialReason={geo.denialReason}
             onPickCoords={geo.setManualLocation}
             onUseGeolocation={geo.requestLocation}
             onReset={geo.resetLocation}
