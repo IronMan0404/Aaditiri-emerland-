@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
@@ -11,7 +11,11 @@ import AuthShell from '@/components/layout/AuthShell';
 
 export default function ResetPasswordPage() {
   const router = useRouter();
-  const supabase = createClient();
+  // Memoise the Supabase client so the bootstrap effect runs exactly once
+  // on mount. Without this, createClient() returns a fresh object every
+  // render, the `[supabase]` dep changes, and the effect re-runs — which
+  // would re-attempt the one-time PKCE code exchange and fail on retry.
+  const supabase = useMemo(() => createClient(), []);
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [showPwd, setShowPwd] = useState(false);
@@ -19,19 +23,107 @@ export default function ResetPasswordPage() {
   const [checkingSession, setCheckingSession] = useState(true);
   const [hasSession, setHasSession] = useState(false);
 
-  // The user only reaches this page from the recovery email link, which
-  // routes through /auth/callback first to exchange the PKCE code for a
-  // session cookie. If they hit this URL directly with no session, send
-  // them back to the request-reset page.
+  // Establishes a recovery session from whichever shape Supabase delivered
+  // the email link in:
+  //
+  // 1. PKCE flow  (default for @supabase/ssr) — link looks like
+  //    /auth/reset-password?code=<one-time-code>. We exchange the code for
+  //    a session right here in the browser so it works even if the email
+  //    template lost the `next=/auth/reset-password` hint and Supabase
+  //    sent the user straight to the Site URL.
+  //
+  // 2. Implicit / hash flow — link looks like
+  //    /auth/reset-password#access_token=...&refresh_token=...&type=recovery.
+  //    Supabase JS used to pick this up automatically; with newer SSR setups
+  //    we have to call setSession() ourselves.
+  //
+  // 3. Already-have-a-session — the user came through /auth/callback first,
+  //    which exchanged the code server-side and set the cookie. In that
+  //    case getSession() returns the recovery session straight away.
+  //
+  // We listen for the PASSWORD_RECOVERY auth event as a fourth fallback —
+  // some browsers fire it after the SDK finishes parsing the URL itself.
   useEffect(() => {
     let active = true;
-    supabase.auth.getSession().then(({ data }) => {
+
+    async function bootstrap() {
+      // Check for a PKCE code in the query string first.
+      const url = new URL(window.location.href);
+      const code = url.searchParams.get('code');
+      const queryError = url.searchParams.get('error_description') ?? url.searchParams.get('error');
+
+      if (code) {
+        const { error } = await supabase.auth.exchangeCodeForSession(code);
+        if (active) {
+          // Strip the code from the URL so a refresh doesn't try to reuse it.
+          url.searchParams.delete('code');
+          window.history.replaceState({}, '', url.pathname + url.search);
+          if (error) {
+            setHasSession(false);
+            setCheckingSession(false);
+            return;
+          }
+          setHasSession(true);
+          setCheckingSession(false);
+          return;
+        }
+      }
+
+      // Check for an implicit-flow hash fragment.
+      if (window.location.hash.includes('access_token')) {
+        const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+        const accessToken = hash.get('access_token');
+        const refreshToken = hash.get('refresh_token');
+        const type = hash.get('type');
+        if (accessToken && refreshToken && type === 'recovery') {
+          const { error } = await supabase.auth.setSession({
+            access_token: accessToken,
+            refresh_token: refreshToken,
+          });
+          if (active) {
+            // Clean the hash so it doesn't get reused.
+            window.history.replaceState({}, '', window.location.pathname);
+            if (error) {
+              setHasSession(false);
+              setCheckingSession(false);
+              return;
+            }
+            setHasSession(true);
+            setCheckingSession(false);
+            return;
+          }
+        }
+      }
+
+      // Fall back to whatever session is already on the cookie (the user
+      // came through /auth/callback or refreshed the page after a successful
+      // exchange above).
+      const { data } = await supabase.auth.getSession();
       if (!active) return;
       setHasSession(Boolean(data.session));
       setCheckingSession(false);
+
+      if (queryError && !data.session) {
+        toast.error(decodeURIComponent(queryError));
+      }
+    }
+
+    bootstrap();
+
+    // Some Supabase SDK builds parse the URL fragment themselves and fire
+    // PASSWORD_RECOVERY shortly after mount. Listen for it so we don't show
+    // the "expired" screen prematurely.
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+      if (!active) return;
+      if (event === 'PASSWORD_RECOVERY' || (event === 'SIGNED_IN' && session)) {
+        setHasSession(true);
+        setCheckingSession(false);
+      }
     });
+
     return () => {
       active = false;
+      sub.subscription.unsubscribe();
     };
   }, [supabase]);
 
@@ -66,7 +158,7 @@ export default function ResetPasswordPage() {
     return (
       <AuthShell>
         <div className="w-full max-w-sm bg-white/95 backdrop-blur-sm rounded-2xl p-8 shadow-2xl text-center">
-          <p className="text-gray-600 text-sm">Loading…</p>
+          <p className="text-gray-600 text-sm">Verifying reset link…</p>
         </div>
       </AuthShell>
     );

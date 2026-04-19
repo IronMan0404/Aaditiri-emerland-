@@ -10,7 +10,14 @@ import { createServerClient } from '@supabase/ssr';
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get('code');
-  const next = searchParams.get('next') ?? '/auth/pending';
+  // Supabase's recovery email always tags the link with type=recovery. When
+  // we see that, route the user to /auth/reset-password so they can pick a
+  // new password — even if the email template lost the explicit `next` hint.
+  const type = searchParams.get('type');
+  const explicitNext = searchParams.get('next');
+  const next =
+    explicitNext ??
+    (type === 'recovery' ? '/auth/reset-password' : '/auth/pending');
 
   // Vercel sits behind a proxy; honour the forwarded host so the final
   // redirect doesn't bounce the user back to an internal URL.

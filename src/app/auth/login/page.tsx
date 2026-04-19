@@ -1,6 +1,6 @@
 'use client';
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useEffect, useMemo, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
 import { createClient } from '@/lib/supabase';
@@ -9,13 +9,31 @@ import { Input } from '@/components/ui/Input';
 import AuthShell from '@/components/layout/AuthShell';
 import { Eye, EyeOff } from 'lucide-react';
 
+// Pulls ?error= / ?error_description= off the URL and shows a toast. Lives
+// in its own component so we can wrap it in <Suspense> — Next.js 16 requires
+// any useSearchParams() consumer to be inside a Suspense boundary or the
+// build fails ("useSearchParams() should be wrapped in a suspense boundary").
+function LoginErrorToast() {
+  const searchParams = useSearchParams();
+  useEffect(() => {
+    const error = searchParams.get('error_description') ?? searchParams.get('error');
+    if (!error) return;
+    const message =
+      error === 'missing_code'
+        ? 'That reset link is missing its verification code. Please request a new one.'
+        : decodeURIComponent(error);
+    toast.error(message, { duration: 6000 });
+  }, [searchParams]);
+  return null;
+}
+
 export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPwd, setShowPwd] = useState(false);
   const [loading, setLoading] = useState(false);
   const router = useRouter();
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
@@ -29,6 +47,9 @@ export default function LoginPage() {
 
   return (
     <AuthShell>
+      <Suspense fallback={null}>
+        <LoginErrorToast />
+      </Suspense>
       <div className="w-full max-w-sm">
         {/* Logo */}
         <div className="text-center mb-8">
