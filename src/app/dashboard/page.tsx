@@ -7,6 +7,7 @@ import { createClient } from '@/lib/supabase';
 import { useAuth } from '@/hooks/useAuth';
 import { format } from 'date-fns';
 import type { Announcement, Event, Broadcast } from '@/types';
+import NearbyPill from '@/components/dashboard/NearbyPill';
 
 export default function DashboardPage() {
   const { profile, isAdmin, mounted } = useAuth();
@@ -80,6 +81,10 @@ export default function DashboardPage() {
                 Admin Dashboard →
               </Link>
             )}
+            {/* Slim location-aware pill: city + temp + AQI, links to the
+                full News page. Lives in the hero so it's at-a-glance but
+                takes a single row, not a whole section. */}
+            {mounted && <NearbyPill />}
           </div>
         </div>
       </div>

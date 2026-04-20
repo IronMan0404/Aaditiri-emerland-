@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
 import { sendPushToUsers } from '@/lib/push';
+import { logAdminAction } from '@/lib/admin-audit';
 
 // Admin-only: approve a pending clubhouse subscription request.
 // Computes start_date = today (or admin override) and end_date =
@@ -34,7 +35,11 @@ export async function POST(
   const user = authRes?.user;
   if (!user) return NextResponse.json({ error: 'Not signed in' }, { status: 401 });
 
-  const { data: me } = await supabase.from('profiles').select('role').eq('id', user.id).single();
+  const { data: me } = await supabase
+    .from('profiles')
+    .select('id, role, email, full_name')
+    .eq('id', user.id)
+    .single();
   if (!me || me.role !== 'admin') {
     return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
   }
@@ -91,6 +96,18 @@ export async function POST(
     })
     .eq('id', sub.id);
   if (updErr) return NextResponse.json({ error: updErr.message }, { status: 500 });
+
+  await logAdminAction({
+    actor: { id: me.id, email: me.email, name: me.full_name },
+    action: 'update',
+    targetType: 'clubhouse_subscription',
+    targetId: sub.id,
+    targetLabel: `Flat ${sub.flat_number} - ${(sub.clubhouse_tiers as { name?: string } | null)?.name ?? 'Tier'}`,
+    reason: `Approved (${months}mo: ${startStr} -> ${endStr})`,
+    before: sub,
+    after: { status: 'active', start_date: startStr, end_date: endStr, approved_by: user.id },
+    request: req,
+  });
 
   // Best-effort: tell the resident their subscription is live.
   let push: { sent?: number; attempted?: number; skipped?: string } = { skipped: 'self' };

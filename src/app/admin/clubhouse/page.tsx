@@ -726,12 +726,89 @@ function SubscriptionsTab({
 
   async function changeStatus(sub: ClubhouseSubscription, next: ClubhouseSubscriptionStatus) {
     if (sub.status === next) return;
-    const patch: Record<string, unknown> = { status: next };
-    if (next === 'cancelled' && !sub.cancelled_at) patch.cancelled_at = new Date().toISOString();
-    const { error } = await supabase.from('clubhouse_subscriptions').update(patch).eq('id', sub.id);
-    if (error) { toast.error(error.message); return; }
+    const res = await globalThis.fetch(`/api/admin/clubhouse/subscriptions/${sub.id}/update`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ status: next, reason: `Status change via admin UI` }),
+    });
+    const json = (await res.json().catch(() => ({}))) as { error?: string };
+    if (!res.ok) { toast.error(json.error ?? 'Update failed'); return; }
     toast.success(`Marked ${next}`);
     onRefresh();
+  }
+
+  // Edit modal state - lets the admin tweak dates / tier on an
+  // existing (non-pending) subscription. All edits flow through the
+  // /update API so they land in the audit log.
+  const [editTarget, setEditTarget] = useState<ClubhouseSubscription | null>(null);
+  const [editForm, setEditForm] = useState({ start_date: '', end_date: '', tier_id: '', reason: '' });
+  const [editSaving, setEditSaving] = useState(false);
+
+  function openEdit(sub: ClubhouseSubscription) {
+    setEditTarget(sub);
+    setEditForm({
+      start_date: sub.start_date,
+      end_date: sub.end_date,
+      tier_id: sub.tier_id,
+      reason: '',
+    });
+  }
+  function closeEdit() { setEditTarget(null); }
+
+  async function submitEdit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editTarget) return;
+    if (editForm.end_date < editForm.start_date) {
+      toast.error('End date cannot be before start date');
+      return;
+    }
+    setEditSaving(true);
+    try {
+      const res = await globalThis.fetch(`/api/admin/clubhouse/subscriptions/${editTarget.id}/update`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(editForm),
+      });
+      const json = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) { toast.error(json.error ?? 'Update failed'); return; }
+      toast.success('Subscription updated');
+      closeEdit();
+      onRefresh();
+    } finally {
+      setEditSaving(false);
+    }
+  }
+
+  // Delete-confirmation modal. Hard-deletes the subscription row.
+  // Active subs are deleteable - the partial unique index reseats once
+  // the row is gone.
+  const [deleteTarget, setDeleteTarget] = useState<ClubhouseSubscription | null>(null);
+  const [deleteReason, setDeleteReason] = useState('');
+  const [deleteSaving, setDeleteSaving] = useState(false);
+
+  function openDelete(sub: ClubhouseSubscription) {
+    setDeleteTarget(sub);
+    setDeleteReason('');
+  }
+  function closeDelete() { setDeleteTarget(null); setDeleteReason(''); }
+
+  async function submitDelete() {
+    if (!deleteTarget) return;
+    setDeleteSaving(true);
+    try {
+      const res = await globalThis.fetch(`/api/admin/clubhouse/subscriptions/${deleteTarget.id}/delete`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ reason: deleteReason.trim() }),
+      });
+      const json = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) { toast.error(json.error ?? 'Delete failed'); return; }
+      toast.success('Subscription deleted');
+      closeDelete();
+      onRefresh();
+    } finally {
+      setDeleteSaving(false);
+    }
   }
 
   return (
@@ -843,7 +920,7 @@ function SubscriptionsTab({
               <div className="md:col-span-3 text-xs text-gray-700" suppressHydrationWarning>
                 {format(new Date(s.start_date), 'dd MMM yyyy')} → {format(new Date(s.end_date), 'dd MMM yyyy')}
               </div>
-              <div className="md:col-span-2 flex items-center justify-end gap-2">
+              <div className="md:col-span-2 flex items-center justify-end gap-1.5 flex-wrap">
                 <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${SUB_STATUS_PILL[s.status]}`}>{SUB_STATUS_LABEL[s.status]}</span>
                 {s.status === 'pending_approval' ? (
                   <div className="flex gap-1">
@@ -875,6 +952,26 @@ function SubscriptionsTab({
                     <option value="cancelled">Cancelled</option>
                   </select>
                 )}
+                {s.status !== 'pending_approval' && (
+                  <button
+                    type="button"
+                    aria-label="Edit subscription"
+                    title="Edit dates / tier"
+                    onClick={() => openEdit(s)}
+                    className="p-1 rounded hover:bg-gray-100 text-gray-500"
+                  >
+                    <Edit3 size={13} />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  aria-label="Delete subscription"
+                  title="Delete subscription"
+                  onClick={() => openDelete(s)}
+                  className="p-1 rounded hover:bg-red-50 text-red-500"
+                >
+                  <Trash2 size={13} />
+                </button>
               </div>
             </div>
           ))}
@@ -893,6 +990,98 @@ function SubscriptionsTab({
             onRefresh();
           }}
         />
+      </Modal>
+
+      {/* Edit subscription (dates / tier) */}
+      <Modal open={!!editTarget} onClose={closeEdit} title="Edit subscription">
+        {editTarget && (
+          <form onSubmit={submitEdit} className="space-y-3">
+            <div className="bg-gray-50 rounded-xl p-3 text-xs">
+              <p>
+                <strong>Flat {editTarget.flat_number}</strong>
+                <span className="text-gray-500"> &middot; {editTarget.primary_user?.full_name ?? 'Resident'}</span>
+              </p>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-gray-700 mb-1 block">Tier</label>
+              <select
+                aria-label="Tier"
+                value={editForm.tier_id}
+                onChange={(e) => setEditForm({ ...editForm, tier_id: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm bg-white"
+              >
+                {tiers.map((t) => <option key={t.id} value={t.id}>{t.name} (₹{t.monthly_price}/mo)</option>)}
+              </select>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Input
+                label="Start date"
+                type="date"
+                value={editForm.start_date}
+                onChange={(e) => setEditForm({ ...editForm, start_date: e.target.value })}
+              />
+              <Input
+                label="End date"
+                type="date"
+                min={editForm.start_date}
+                value={editForm.end_date}
+                onChange={(e) => setEditForm({ ...editForm, end_date: e.target.value })}
+              />
+            </div>
+            <Textarea
+              label="Reason for change (recorded in audit log)"
+              value={editForm.reason}
+              rows={2}
+              maxLength={500}
+              onChange={(e) => setEditForm({ ...editForm, reason: e.target.value })}
+              placeholder="e.g. Moved start date forward at resident's request"
+            />
+            <div className="flex gap-3 pt-1">
+              <Button type="button" variant="secondary" onClick={closeEdit} className="flex-1">Cancel</Button>
+              <Button type="submit" loading={editSaving} className="flex-1">Save</Button>
+            </div>
+          </form>
+        )}
+      </Modal>
+
+      {/* Delete subscription confirmation */}
+      <Modal open={!!deleteTarget} onClose={closeDelete} title="Delete subscription?">
+        {deleteTarget && (
+          <div className="space-y-3">
+            <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-xs text-red-800">
+              <p className="font-bold">This cannot be undone.</p>
+              <p className="mt-1">
+                Flat <strong>{deleteTarget.flat_number}</strong> &middot;{' '}
+                {deleteTarget.clubhouse_tiers?.name ?? 'Tier'} &middot; {SUB_STATUS_LABEL[deleteTarget.status]}
+              </p>
+              <p className="mt-1">
+                Period {format(new Date(deleteTarget.start_date), 'dd MMM yyyy')}
+                {' → '}
+                {format(new Date(deleteTarget.end_date), 'dd MMM yyyy')}
+              </p>
+            </div>
+            <Textarea
+              label="Reason for deletion (recorded in audit log)"
+              value={deleteReason}
+              rows={2}
+              maxLength={500}
+              onChange={(e) => setDeleteReason(e.target.value)}
+              placeholder="e.g. Created in error / duplicate"
+            />
+            <div className="flex gap-3 pt-1">
+              <Button type="button" variant="secondary" onClick={closeDelete} className="flex-1">Cancel</Button>
+              <Button
+                type="button"
+                variant="danger"
+                onClick={submitDelete}
+                loading={deleteSaving}
+                className="flex-1"
+              >
+                Delete
+              </Button>
+            </div>
+          </div>
+        )}
       </Modal>
 
       {/* Approve / reject pending request modal */}

@@ -311,17 +311,69 @@ export function MarketsPanel() {
 // Panchang
 // =============================================================================
 
+interface BilingualName { nameEn: string; nameTe: string }
+interface KalamWindow { startISO: string; endISO: string }
+interface TeluguPanchangam {
+  samvatsara: string;
+  ayana: BilingualName;
+  ritu: BilingualName & { season: string };
+  masa: BilingualName;
+  paksha: BilingualName;
+  vara: BilingualName & { short: string };
+  tithi: BilingualName & { index: number; paksha: 'Shukla' | 'Krishna'; pakshaTe: string };
+  nakshatra: BilingualName & { index: number };
+  yoga: BilingualName & { index: number };
+  karana: { name: string };
+  auspicious: { abhijit: KalamWindow; brahmaMuhurat: KalamWindow; amritKaal: KalamWindow };
+  inauspicious: {
+    rahuKalam: KalamWindow; yamaganda: KalamWindow; gulikaKalam: KalamWindow;
+    durmuhurtam: KalamWindow; varjyam: KalamWindow;
+  };
+  computed: { sunriseFromApi: boolean; method: string };
+}
 interface PanchangPayload {
   city: string; date: string; weekday: string;
   moon: { name: string; emoji: string; illumPct: number; ageDays: number };
   tithi: { index: number; name: string; paksha: 'Shukla' | 'Krishna' };
   sunrise?: string; sunset?: string; dayLength?: string;
+  telugu?: TeluguPanchangam;
+}
+
+// Format an ISO timestamp as a local "06:23 AM" label. Returns "–" on bad
+// input so the UI never shows "Invalid Date".
+function fmtTime(iso?: string): string {
+  if (!iso) return '–';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '–';
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+// Format a Kalam window as "06:23 – 07:11". Used for every kalam row in the
+// detailed view.
+function fmtKalam(k?: KalamWindow): string {
+  if (!k) return '–';
+  return `${fmtTime(k.startISO)} – ${fmtTime(k.endISO)}`;
 }
 
 export function PanchangPanel({ location }: { location: ResolvedLocation }) {
   const [data, setData] = useState<PanchangPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Simple = the legacy 4-tile view. Detailed = the full Telugu Panchangam
+  // with all 5 angas + auspicious/inauspicious time windows. We default to
+  // Simple so existing users aren't surprised, but remember the choice in
+  // localStorage so anyone who switches to Detailed gets it sticky.
+  const [view, setView] = useState<'simple' | 'detailed'>('simple');
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem('ae-panchang-view');
+      if (saved === 'detailed' || saved === 'simple') setView(saved);
+    } catch { /* localStorage may be disabled */ }
+  }, []);
+  const switchView = useCallback((next: 'simple' | 'detailed') => {
+    setView(next);
+    try { window.localStorage.setItem('ae-panchang-view', next); } catch { /* ignore */ }
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -341,12 +393,58 @@ export function PanchangPanel({ location }: { location: ResolvedLocation }) {
   if (error && !data) return <ErrorState message={error} onRetry={load} />;
   if (!data) return null;
 
-  const sunrise = data.sunrise ? new Date(data.sunrise).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '–';
-  const sunset  = data.sunset  ? new Date(data.sunset).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })  : '–';
   const dateLabel = new Date(data.date + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 
   return (
     <div className="space-y-3">
+      {/* Simple/Detailed toggle. Only render when the API actually returned
+          the Telugu payload — keeps the panel forward-compatible if the
+          route ever rolls back. */}
+      {data.telugu && (
+        <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-full self-start text-[11px] font-semibold w-fit">
+          <button
+            type="button"
+            onClick={() => switchView('simple')}
+            aria-pressed={view === 'simple'}
+            className={`px-3 py-1 rounded-full transition ${view === 'simple' ? 'bg-white text-[#1B5E20] shadow-sm' : 'text-gray-500'}`}
+          >
+            Simple
+          </button>
+          <button
+            type="button"
+            onClick={() => switchView('detailed')}
+            aria-pressed={view === 'detailed'}
+            className={`px-3 py-1 rounded-full transition ${view === 'detailed' ? 'bg-white text-[#1B5E20] shadow-sm' : 'text-gray-500'}`}
+          >
+            Detailed (తెలుగు)
+          </button>
+        </div>
+      )}
+
+      {view === 'simple' || !data.telugu ? (
+        <SimplePanchang data={data} />
+      ) : (
+        <DetailedTeluguPanchang data={data} telugu={data.telugu} dateLabel={dateLabel} />
+      )}
+
+      <p className="text-[10px] text-gray-400 text-center px-2 leading-snug">
+        Computed locally · For ritual-precise timings (true sidereal positions) cross-check with{' '}
+        <a href="https://www.drikpanchang.com/" target="_blank" rel="noopener noreferrer" className="underline">drikpanchang.com</a>
+      </p>
+    </div>
+  );
+}
+
+// =============================================================================
+// Simple view (legacy 4-tile layout)
+// =============================================================================
+
+function SimplePanchang({ data }: { data: PanchangPayload }) {
+  const sunrise = fmtTime(data.sunrise);
+  const sunset  = fmtTime(data.sunset);
+  const dateLabel = new Date(data.date + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  return (
+    <>
       <div className="rounded-2xl bg-gradient-to-br from-orange-500 to-amber-600 text-white p-4 sm:p-5 shadow-sm">
         <p className="text-[10px] sm:text-xs uppercase tracking-wider text-white/80 truncate">{data.city} · Panchang</p>
         <p className="text-sm sm:text-base font-bold mt-1 leading-tight">{dateLabel}</p>
@@ -384,10 +482,153 @@ export function PanchangPanel({ location }: { location: ResolvedLocation }) {
           <p className="text-[10px] text-gray-500">Sunset</p>
         </div>
       </div>
+    </>
+  );
+}
 
-      <p className="text-[10px] text-gray-400 text-center px-2 leading-snug">
-        Tithi computed locally · For full Panchang (Nakshatra, Yoga, Karana) visit{' '}
-        <a href="https://www.drikpanchang.com/" target="_blank" rel="noopener noreferrer" className="underline">drikpanchang.com</a>
+// =============================================================================
+// Detailed Telugu Panchangam view
+// =============================================================================
+
+function DetailedTeluguPanchang({
+  data, telugu, dateLabel,
+}: { data: PanchangPayload; telugu: TeluguPanchangam; dateLabel: string }) {
+  const sunrise = fmtTime(data.sunrise);
+  const sunset  = fmtTime(data.sunset);
+
+  return (
+    <>
+      {/* Hero card — same warm orange/amber gradient as the simple view so
+          the visual identity stays consistent. Shows: date, year-name
+          (Samvatsara), masa, paksha, ritu, ayana — the high-level "where
+          we are in the year" context. */}
+      <div className="rounded-2xl bg-gradient-to-br from-orange-500 to-amber-600 text-white p-4 sm:p-5 shadow-sm">
+        <p className="text-[10px] sm:text-xs uppercase tracking-wider text-white/80 truncate">
+          {data.city} · పంచాంగం (Panchangam)
+        </p>
+        <p className="text-sm sm:text-base font-bold mt-1 leading-tight">{dateLabel}</p>
+        <p className="text-xs sm:text-sm text-white/90 mt-0.5">
+          {telugu.vara.nameTe} · {telugu.vara.nameEn}
+        </p>
+
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3 mt-3 sm:mt-4 pt-3 border-t border-white/20">
+          <BilingualTile labelEn="Year" labelTe="సంవత్సరం" valueEn={telugu.samvatsara} />
+          <BilingualTile labelEn="Month" labelTe="మాసం" valueEn={telugu.masa.nameEn} valueTe={telugu.masa.nameTe} />
+          <BilingualTile labelEn="Paksha" labelTe="పక్షం" valueEn={telugu.paksha.nameEn} valueTe={telugu.paksha.nameTe} />
+          <BilingualTile labelEn="Ritu" labelTe="ఋతువు" valueEn={`${telugu.ritu.nameEn} (${telugu.ritu.season})`} valueTe={telugu.ritu.nameTe} />
+          <BilingualTile labelEn="Ayana" labelTe="అయనం" valueEn={telugu.ayana.nameEn} valueTe={telugu.ayana.nameTe} />
+          <BilingualTile labelEn="Moon" labelTe="చంద్రుడు" valueEn={`${data.moon.emoji} ${data.moon.illumPct}%`} />
+        </div>
+      </div>
+
+      {/* The five angas (పంచ-అంగాలు) — the classical core of any Panchangam. */}
+      <div className="rounded-xl bg-white border border-gray-200 p-3 sm:p-4 shadow-sm">
+        <p className="text-[10px] sm:text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 px-1">
+          పంచాంగం · Five Angas
+        </p>
+        <div className="space-y-2">
+          <AngaRow labelEn="Tithi" labelTe="తిథి" value={`${telugu.tithi.nameEn} (${telugu.tithi.nameTe})`} hint={`${telugu.paksha.nameEn} Paksha · day ${telugu.tithi.index}`} />
+          <AngaRow labelEn="Vara" labelTe="వారం" value={`${telugu.vara.nameEn} (${telugu.vara.nameTe})`} />
+          <AngaRow labelEn="Nakshatra" labelTe="నక్షత్రం" value={`${telugu.nakshatra.nameEn} (${telugu.nakshatra.nameTe})`} hint={`#${telugu.nakshatra.index} of 27`} />
+          <AngaRow labelEn="Yoga" labelTe="యోగం" value={`${telugu.yoga.nameEn} (${telugu.yoga.nameTe})`} hint={`#${telugu.yoga.index} of 27`} />
+          <AngaRow labelEn="Karana" labelTe="కరణం" value={telugu.karana.name} />
+        </div>
+      </div>
+
+      {/* Sun timings — needed by the kalam math, surfaced for context. */}
+      <div className="rounded-xl bg-white border border-gray-200 p-3 sm:p-4 shadow-sm grid grid-cols-3 gap-1 sm:gap-2 text-center">
+        <div className="min-w-0">
+          <Sunrise size={16} className="inline text-orange-500 mb-1" />
+          <p className="text-xs sm:text-sm font-bold text-gray-900 truncate">{sunrise}</p>
+          <p className="text-[10px] text-gray-500">సూర్యోదయం · Sunrise</p>
+        </div>
+        <div className="min-w-0">
+          <Sun size={16} className="inline text-yellow-500 mb-1" />
+          <p className="text-xs sm:text-sm font-bold text-gray-900 truncate">{data.dayLength ?? '–'}</p>
+          <p className="text-[10px] text-gray-500">దినమానం · Day length</p>
+        </div>
+        <div className="min-w-0">
+          <Sunset size={16} className="inline text-orange-700 mb-1" />
+          <p className="text-xs sm:text-sm font-bold text-gray-900 truncate">{sunset}</p>
+          <p className="text-[10px] text-gray-500">సూర్యాస్తమయం · Sunset</p>
+        </div>
+      </div>
+
+      {/* Auspicious time windows — green-tinted. These are the "good
+          times" residents look up before scheduling poojas, travel, etc. */}
+      <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-3 sm:p-4 shadow-sm">
+        <p className="text-[10px] sm:text-xs font-bold text-emerald-800 uppercase tracking-wider mb-2 px-1">
+          శుభ సమయాలు · Auspicious times
+        </p>
+        <div className="space-y-1.5">
+          <KalamRow labelEn="Brahma Muhurat" labelTe="బ్రహ్మ ముహూర్తం" window={telugu.auspicious.brahmaMuhurat} tone="good" />
+          <KalamRow labelEn="Abhijit Muhurat" labelTe="అభిజిత్ ముహూర్తం" window={telugu.auspicious.abhijit} tone="good" />
+          <KalamRow labelEn="Amrit Kaal" labelTe="అమృత కాలం" window={telugu.auspicious.amritKaal} tone="good" />
+        </div>
+      </div>
+
+      {/* Inauspicious time windows — red-tinted. The ones residents
+          actively AVOID for new beginnings, travel, signings, etc. */}
+      <div className="rounded-xl bg-red-50 border border-red-200 p-3 sm:p-4 shadow-sm">
+        <p className="text-[10px] sm:text-xs font-bold text-red-800 uppercase tracking-wider mb-2 px-1">
+          అశుభ సమయాలు · Inauspicious times
+        </p>
+        <div className="space-y-1.5">
+          <KalamRow labelEn="Rahu Kalam" labelTe="రాహుకాలం" window={telugu.inauspicious.rahuKalam} tone="bad" />
+          <KalamRow labelEn="Yamaganda" labelTe="యమగండ" window={telugu.inauspicious.yamaganda} tone="bad" />
+          <KalamRow labelEn="Gulika Kalam" labelTe="గుళికకాలం" window={telugu.inauspicious.gulikaKalam} tone="bad" />
+          <KalamRow labelEn="Durmuhurtam" labelTe="దుర్ముహూర్తం" window={telugu.inauspicious.durmuhurtam} tone="bad" />
+          <KalamRow labelEn="Varjyam" labelTe="వర్జ్యం" window={telugu.inauspicious.varjyam} tone="bad" />
+        </div>
+      </div>
+    </>
+  );
+}
+
+// =============================================================================
+// Small presentational helpers for the detailed view
+// =============================================================================
+
+function BilingualTile({
+  labelEn, labelTe, valueEn, valueTe,
+}: { labelEn: string; labelTe: string; valueEn: string; valueTe?: string }) {
+  return (
+    <div className="min-w-0">
+      <p className="text-[10px] text-white/70 uppercase tracking-wider truncate">{labelTe} · {labelEn}</p>
+      <p className="text-sm sm:text-base font-bold truncate" title={`${valueEn}${valueTe ? ` (${valueTe})` : ''}`}>
+        {valueTe ?? valueEn}
+      </p>
+      {valueTe && <p className="text-[10px] text-white/85 truncate">{valueEn}</p>}
+    </div>
+  );
+}
+
+function AngaRow({ labelEn, labelTe, value, hint }: { labelEn: string; labelTe: string; value: string; hint?: string }) {
+  return (
+    <div className="flex items-center justify-between gap-2 py-1 border-b border-gray-100 last:border-b-0">
+      <div className="min-w-0">
+        <p className="text-[10px] sm:text-[11px] font-semibold text-gray-500 uppercase tracking-wider">{labelTe} · {labelEn}</p>
+        {hint && <p className="text-[10px] text-gray-400 truncate">{hint}</p>}
+      </div>
+      <p className="text-xs sm:text-sm font-bold text-gray-900 text-right truncate min-w-0 max-w-[60%]" title={value}>
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function KalamRow({
+  labelEn, labelTe, window: w, tone,
+}: { labelEn: string; labelTe: string; window: KalamWindow; tone: 'good' | 'bad' }) {
+  const valueColor = tone === 'good' ? 'text-emerald-700' : 'text-red-700';
+  return (
+    <div className="flex items-center justify-between gap-2 py-1">
+      <div className="min-w-0">
+        <p className="text-[11px] sm:text-xs font-semibold text-gray-700 truncate">{labelTe}</p>
+        <p className="text-[10px] text-gray-500 truncate">{labelEn}</p>
+      </div>
+      <p className={`text-[12px] sm:text-sm font-bold ${valueColor} text-right whitespace-nowrap font-mono`}>
+        {fmtKalam(w)}
       </p>
     </div>
   );

@@ -4,6 +4,7 @@ import { Trash2, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { createClient } from '@/lib/supabase';
 import { format } from 'date-fns';
+import { safeImageUrl } from '@/lib/safe-url';
 import type { Photo } from '@/types';
 
 export default function AdminGalleryPage() {
@@ -52,21 +53,31 @@ export default function AdminGalleryPage() {
         <p className="text-center text-gray-400 py-12">No photos yet</p>
       ) : (
         <div className="grid grid-cols-3 md:grid-cols-4 gap-1">
-          {photos.map((p) => (
-            <button key={p.id} onClick={() => setViewer(p)} className="aspect-square relative overflow-hidden rounded-lg group">
-              <img src={p.url} alt={p.caption || ''} className="w-full h-full object-cover transition-transform group-hover:scale-105" />
-              <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center">
-                <Trash2 size={20} className="text-white opacity-0 group-hover:opacity-100 transition-opacity" />
-              </div>
-            </button>
-          ))}
+          {photos.map((p) => {
+            const src = safeImageUrl(p.url);
+            if (!src) return null;
+            return (
+              <button key={p.id} onClick={() => setViewer(p)} className="aspect-square relative overflow-hidden rounded-lg group">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={encodeURI(src)} alt={p.caption || ''} className="w-full h-full object-cover transition-transform group-hover:scale-105" />
+                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center">
+                  <Trash2 size={20} className="text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+                </div>
+              </button>
+            );
+          })}
         </div>
       )}
 
-      {viewer && (
+      {(() => {
+        if (!viewer) return null;
+        const safeViewerUrl = safeImageUrl(viewer.url);
+        if (!safeViewerUrl) return null;
+        return (
         <div className="fixed inset-0 bg-black/95 z-50 flex flex-col items-center justify-center p-4" onClick={() => setViewer(null)}>
           <button className="absolute top-4 right-4 text-white" onClick={() => setViewer(null)}><X size={28} /></button>
-          <img src={viewer.url} alt={viewer.caption || ''} className="max-w-full max-h-[70vh] object-contain rounded-lg" onClick={(e) => e.stopPropagation()} />
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={encodeURI(safeViewerUrl)} alt={viewer.caption || ''} className="max-w-full max-h-[70vh] object-contain rounded-lg" onClick={(e) => e.stopPropagation()} />
           {viewer.caption && <p className="text-white/80 text-sm mt-3">{viewer.caption}</p>}
           <p className="text-white/50 text-xs mt-1">
             by {(viewer.profiles as any)?.full_name}
@@ -82,7 +93,8 @@ export default function AdminGalleryPage() {
             {deleting === viewer.id ? 'Deleting...' : 'Delete Photo'}
           </button>
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 }

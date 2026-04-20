@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/Input';
 import VehiclesEditor, { type VehicleDraft } from '@/components/ui/VehiclesEditor';
 import FamilyEditor, { type FamilyMemberDraft } from '@/components/ui/FamilyEditor';
 import PetsEditor, { type PetDraft } from '@/components/ui/PetsEditor';
+import { safeImageUrl } from '@/lib/safe-url';
 
 export default function ProfilePage() {
   const { profile, isAdmin, refetchProfile } = useAuth();
@@ -109,14 +110,16 @@ export default function ProfilePage() {
   }
 
   const initials = (profile?.full_name || 'U').split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
+  const safeAvatar = safeImageUrl(profile?.avatar_url);
 
   return (
     <div className="max-w-md mx-auto px-4 py-6">
       {/* Profile Header */}
       <div className="bg-[#1B5E20] rounded-2xl p-6 text-white text-center mb-4">
         <div className="relative inline-block mb-3">
-          {profile?.avatar_url ? (
-            <img src={profile.avatar_url} alt="avatar" className="w-20 h-20 rounded-full object-cover border-3 border-white" />
+          {safeAvatar ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={encodeURI(safeAvatar)} alt="avatar" className="w-20 h-20 rounded-full object-cover border-3 border-white" />
           ) : (
             <div className="w-20 h-20 rounded-full bg-white/20 flex items-center justify-center text-2xl font-bold">{initials}</div>
           )}

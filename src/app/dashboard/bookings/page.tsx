@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { Plus, Clock, MapPin, AlertTriangle, Ban, Lock } from 'lucide-react';
+import { Plus, Clock, MapPin, AlertTriangle, Ban, Lock, Edit3, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { createClient } from '@/lib/supabase';
 import { useAuth } from '@/hooks/useAuth';
@@ -39,6 +39,16 @@ export default function BookingsPage() {
   const [adminAction, setAdminAction] = useState<AdminAction>('revoke');
   const [adminReason, setAdminReason] = useState('');
   const [adminSaving, setAdminSaving] = useState(false);
+
+  // Admin: hard-delete (used to prune past bookings) and edit
+  // (date/slot/notes/facility). Both flow through audited APIs.
+  const [deleteTarget, setDeleteTarget] = useState<Booking | null>(null);
+  const [deleteReason, setDeleteReason] = useState('');
+  const [deleteSaving, setDeleteSaving] = useState(false);
+
+  const [editTarget, setEditTarget] = useState<Booking | null>(null);
+  const [editForm, setEditForm] = useState({ date: '', time_slot: '', facility: '', notes: '', reason: '' });
+  const [editSaving, setEditSaving] = useState(false);
 
   const supabase = createClient();
 
@@ -196,6 +206,77 @@ export default function BookingsPage() {
     }
   }
 
+  function openDelete(b: Booking) {
+    setDeleteTarget(b);
+    setDeleteReason('');
+  }
+  function closeDelete() { setDeleteTarget(null); setDeleteReason(''); }
+
+  async function submitDelete() {
+    if (!deleteTarget) return;
+    setDeleteSaving(true);
+    try {
+      const res = await globalThis.fetch(`/api/admin/bookings/${deleteTarget.id}/delete`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ reason: deleteReason.trim() }),
+      });
+      const json = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) { toast.error(json.error ?? 'Delete failed'); return; }
+      toast.success('Booking deleted');
+      closeDelete();
+      fetch();
+    } finally {
+      setDeleteSaving(false);
+    }
+  }
+
+  function openEdit(b: Booking) {
+    setEditTarget(b);
+    setEditForm({
+      date: b.date,
+      time_slot: b.time_slot,
+      facility: b.facility,
+      notes: b.notes ?? '',
+      reason: '',
+    });
+  }
+  function closeEdit() { setEditTarget(null); }
+
+  async function submitEdit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editTarget) return;
+    setEditSaving(true);
+    try {
+      const res = await globalThis.fetch(`/api/admin/bookings/${editTarget.id}/update`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          date: editForm.date,
+          time_slot: editForm.time_slot,
+          facility: editForm.facility,
+          notes: editForm.notes || null,
+          reason: editForm.reason.trim(),
+        }),
+      });
+      const json = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) { toast.error(json.error ?? 'Update failed'); return; }
+      toast.success('Booking updated');
+      closeEdit();
+      fetch();
+    } finally {
+      setEditSaving(false);
+    }
+  }
+
+  // A booking is "past" if its date is strictly before today (IST is the
+  // app's timezone but a date-only comparison is good enough here).
+  function isPastBooking(b: Booking): boolean {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return new Date(b.date).getTime() < today.getTime();
+  }
+
   return (
     <div className="max-w-2xl mx-auto px-4 py-6">
       <div className="flex items-center justify-between mb-4">
@@ -250,6 +331,26 @@ export default function BookingsPage() {
                     )}
                     {b.user_id === profile?.id && b.status === 'pending' && (
                       <button onClick={() => updateStatus(b.id, 'cancelled')} className="px-3 py-1 bg-gray-100 text-gray-600 text-xs font-semibold rounded-lg hover:bg-gray-200 transition-colors">Cancel</button>
+                    )}
+                    {isAdmin && (
+                      <>
+                        <button
+                          onClick={() => openEdit(b)}
+                          title="Edit booking (admin)"
+                          aria-label="Edit booking"
+                          className="inline-flex items-center gap-1 px-3 py-1 bg-gray-100 text-gray-600 text-xs font-semibold rounded-lg hover:bg-gray-200 transition-colors"
+                        >
+                          <Edit3 size={12} />Edit
+                        </button>
+                        <button
+                          onClick={() => openDelete(b)}
+                          title={isPastBooking(b) ? 'Delete past booking' : 'Delete booking'}
+                          aria-label="Delete booking"
+                          className="inline-flex items-center gap-1 px-3 py-1 bg-red-50 text-red-600 text-xs font-semibold rounded-lg hover:bg-red-100 transition-colors"
+                        >
+                          <Trash2 size={12} />Delete
+                        </button>
+                      </>
                     )}
                   </div>
                 </div>
@@ -361,6 +462,96 @@ export default function BookingsPage() {
           </form>
         )}
       </Modal>
+
+      {/* Admin: edit a booking */}
+      <Modal open={!!editTarget} onClose={closeEdit} title="Edit booking">
+        {editTarget && (
+          <form onSubmit={submitEdit} className="space-y-3">
+            <Input
+              label="Facility"
+              value={editForm.facility}
+              onChange={(e) => setEditForm({ ...editForm, facility: e.target.value })}
+            />
+            <Input
+              label="Date"
+              type="date"
+              value={editForm.date}
+              onChange={(e) => setEditForm({ ...editForm, date: e.target.value })}
+            />
+            <div>
+              <label className="text-sm font-medium text-gray-700 mb-1 block">Time slot</label>
+              <select
+                aria-label="Time slot"
+                value={editForm.time_slot}
+                onChange={(e) => setEditForm({ ...editForm, time_slot: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm bg-white"
+              >
+                {TIME_SLOTS.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+            <Textarea
+              label="Notes"
+              value={editForm.notes}
+              rows={2}
+              onChange={(e) => setEditForm({ ...editForm, notes: e.target.value })}
+            />
+            <Textarea
+              label="Reason for change (recorded in audit log)"
+              value={editForm.reason}
+              rows={2}
+              maxLength={500}
+              onChange={(e) => setEditForm({ ...editForm, reason: e.target.value })}
+              placeholder="e.g. Resident requested a slot swap"
+            />
+            <div className="flex gap-3 pt-1">
+              <Button type="button" variant="secondary" onClick={closeEdit} className="flex-1">Cancel</Button>
+              <Button type="submit" loading={editSaving} className="flex-1">Save</Button>
+            </div>
+          </form>
+        )}
+      </Modal>
+
+      {/* Admin: delete a booking */}
+      <Modal open={!!deleteTarget} onClose={closeDelete} title="Delete booking?">
+        {deleteTarget && (
+          <div className="space-y-3">
+            <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-xs text-red-800">
+              <p className="font-bold">This cannot be undone.</p>
+              <p className="mt-1">
+                <strong>{deleteTarget.facility}</strong> on{' '}
+                <strong>{format(new Date(deleteTarget.date), 'dd MMM yyyy')}</strong>{' '}
+                ({deleteTarget.time_slot})
+              </p>
+              <p className="mt-1">
+                {(deleteTarget.profiles as { full_name?: string; flat_number?: string } | null)?.full_name ?? '\u2014'}
+                {' \u00b7 Flat '}
+                {(deleteTarget.profiles as { flat_number?: string } | null)?.flat_number ?? '\u2014'}
+              </p>
+            </div>
+            <Textarea
+              label="Reason for deletion (recorded in audit log)"
+              value={deleteReason}
+              rows={2}
+              maxLength={500}
+              onChange={(e) => setDeleteReason(e.target.value)}
+              placeholder="e.g. Cleaning up old data after the event"
+            />
+            <div className="flex gap-3 pt-1">
+              <Button type="button" variant="secondary" onClick={closeDelete} className="flex-1">Cancel</Button>
+              <Button
+                type="button"
+                variant="danger"
+                onClick={submitDelete}
+                loading={deleteSaving}
+                className="flex-1"
+              >
+                Delete
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
     </div>
   );
 }
