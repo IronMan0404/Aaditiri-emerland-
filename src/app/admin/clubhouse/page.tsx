@@ -114,18 +114,18 @@ export default function AdminClubhousePage() {
   }
 
   return (
-    <div className="max-w-6xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
-      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Clubhouse</h1>
+    <div className="max-w-6xl mx-auto w-full px-3 sm:px-4 py-4 sm:py-6">
+      <div className="flex items-start justify-between mb-4 gap-2">
+        <div className="min-w-0 flex-1">
+          <h1 className="text-xl sm:text-2xl font-bold text-gray-900 truncate">Clubhouse</h1>
           <p className="text-xs text-gray-500 mt-0.5">Facilities, tiers, subscriptions and usage analytics</p>
         </div>
         <Link
           href="/admin/clubhouse/validate"
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#1B5E20] text-white text-xs font-semibold hover:bg-[#2E7D32]"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#1B5E20] text-white text-xs font-semibold hover:bg-[#2E7D32] shrink-0"
         >
           <ScanLine size={14} />
-          Validate pass
+          Validate
         </Link>
       </div>
 
@@ -264,51 +264,99 @@ function FacilitiesTab({
         </Button>
         <Button size="sm" onClick={startCreate}><Plus size={14} />Add facility</Button>
       </div>
-      <div className="bg-white rounded-xl shadow-sm overflow-hidden">
-        <div className="grid grid-cols-12 gap-2 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-gray-500 border-b">
-          <div className="col-span-4">Name</div>
-          <div className="col-span-3">Slug</div>
-          <div className="col-span-2 text-right">Hourly / Pass</div>
-          <div className="col-span-2">Status</div>
-          <div className="col-span-1 text-right">Actions</div>
+      {/* Empty state */}
+      {facilities.length === 0 && (
+        <div className="bg-white rounded-xl shadow-sm py-6 text-center text-xs">
+          <p className="text-gray-400 italic mb-2">No facilities yet</p>
+          <button
+            type="button"
+            onClick={seedDefaults}
+            className="text-[#1B5E20] font-semibold hover:underline"
+          >
+            Tap here to load the default catalogue
+          </button>
         </div>
-        {facilities.length === 0 ? (
-          <div className="py-6 text-center text-xs">
-            <p className="text-gray-400 italic mb-2">No facilities yet</p>
-            <button
-              type="button"
-              onClick={seedDefaults}
-              className="text-[#1B5E20] font-semibold hover:underline"
-            >
-              Tap here to load the default catalogue
-            </button>
+      )}
+
+      {/* Mobile: stacked cards. Each facility is one card, no horizontal scroll
+          required. */}
+      {facilities.length > 0 && (
+        <div className="space-y-2 sm:hidden">
+          {facilities.map((f) => (
+            <div key={f.id} className="bg-white rounded-xl shadow-sm p-3">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0 flex-1">
+                  <p className="font-semibold text-gray-900 truncate">{f.name}</p>
+                  <p className="text-[11px] text-gray-500 font-mono truncate">{f.slug}</p>
+                </div>
+                <div className="flex gap-1 shrink-0">
+                  <button type="button" aria-label="Edit" onClick={() => startEdit(f)} className="p-1.5 rounded hover:bg-gray-100 text-gray-600">
+                    <Edit3 size={14} />
+                  </button>
+                  <button type="button" aria-label="Delete" onClick={() => remove(f)} className="p-1.5 rounded hover:bg-red-50 text-red-500">
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </div>
+              {f.description && <p className="text-[11px] text-gray-500 mt-1 line-clamp-2">{f.description}</p>}
+              <div className="flex items-center justify-between mt-2 pt-2 border-t border-gray-100">
+                <div className="text-xs text-gray-700">
+                  <span className="text-gray-400">Hourly</span> ₹{f.hourly_rate}
+                  <span className="text-gray-400 ml-2">Pass</span> ₹{f.pass_rate_per_visit}
+                </div>
+                <div className="flex flex-wrap gap-1 justify-end">
+                  {f.requires_subscription && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-purple-100 text-purple-700">SUB</span>}
+                  {!f.is_active && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-gray-100 text-gray-500">OFF</span>}
+                  {f.is_bookable && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-green-100 text-green-700">BOOK</span>}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Tablet+: classic table. Wrapped in `overflow-x-auto` as a defence-in-depth
+          measure in case the viewport drops below the table's natural width. */}
+      {facilities.length > 0 && (
+        <div className="hidden sm:block bg-white rounded-xl shadow-sm overflow-hidden">
+          <div className="overflow-x-auto">
+            <div className="min-w-[640px]">
+              <div className="grid grid-cols-12 gap-2 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-gray-500 border-b">
+                <div className="col-span-4">Name</div>
+                <div className="col-span-3">Slug</div>
+                <div className="col-span-2 text-right">Hourly / Pass</div>
+                <div className="col-span-2">Status</div>
+                <div className="col-span-1 text-right">Actions</div>
+              </div>
+              {facilities.map((f) => (
+                <div key={f.id} className="grid grid-cols-12 gap-2 px-3 py-3 text-sm border-b last:border-b-0 items-center">
+                  <div className="col-span-4 min-w-0">
+                    <p className="font-semibold text-gray-900 truncate">{f.name}</p>
+                    {f.description && <p className="text-[11px] text-gray-500 line-clamp-1">{f.description}</p>}
+                  </div>
+                  <div className="col-span-3 text-xs text-gray-600 font-mono truncate">{f.slug}</div>
+                  <div className="col-span-2 text-right text-xs text-gray-700">
+                    ₹{f.hourly_rate}/h · ₹{f.pass_rate_per_visit}/visit
+                  </div>
+                  <div className="col-span-2 flex flex-wrap gap-1">
+                    {f.requires_subscription && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-purple-100 text-purple-700">SUB</span>}
+                    {!f.is_active && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-gray-100 text-gray-500">OFF</span>}
+                    {f.is_bookable && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-green-100 text-green-700">BOOK</span>}
+                  </div>
+                  <div className="col-span-1 flex justify-end gap-1">
+                    <button type="button" aria-label="Edit" onClick={() => startEdit(f)} className="p-1.5 rounded hover:bg-gray-100 text-gray-600">
+                      <Edit3 size={13} />
+                    </button>
+                    <button type="button" aria-label="Delete" onClick={() => remove(f)} className="p-1.5 rounded hover:bg-red-50 text-red-500">
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
-        ) : facilities.map((f) => (
-          <div key={f.id} className="grid grid-cols-12 gap-2 px-3 py-3 text-sm border-b last:border-b-0 items-center">
-            <div className="col-span-4">
-              <p className="font-semibold text-gray-900">{f.name}</p>
-              {f.description && <p className="text-[11px] text-gray-500 line-clamp-1">{f.description}</p>}
-            </div>
-            <div className="col-span-3 text-xs text-gray-600 font-mono">{f.slug}</div>
-            <div className="col-span-2 text-right text-xs text-gray-700">
-              ₹{f.hourly_rate}/h · ₹{f.pass_rate_per_visit}/visit
-            </div>
-            <div className="col-span-2 flex flex-wrap gap-1">
-              {f.requires_subscription && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-purple-100 text-purple-700">SUB</span>}
-              {!f.is_active && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-gray-100 text-gray-500">OFF</span>}
-              {f.is_bookable && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-green-100 text-green-700">BOOK</span>}
-            </div>
-            <div className="col-span-1 flex justify-end gap-1">
-              <button type="button" aria-label="Edit" onClick={() => startEdit(f)} className="p-1.5 rounded hover:bg-gray-100 text-gray-600">
-                <Edit3 size={13} />
-              </button>
-              <button type="button" aria-label="Delete" onClick={() => remove(f)} className="p-1.5 rounded hover:bg-red-50 text-red-500">
-                <Trash2 size={13} />
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
+        </div>
+      )}
 
       <Modal open={open} onClose={() => setOpen(false)} title={editing?.id ? 'Edit facility' : 'Add facility'}>
         {editing && <FacilityForm initial={editing} onSubmit={save} onCancel={() => setOpen(false)} />}
