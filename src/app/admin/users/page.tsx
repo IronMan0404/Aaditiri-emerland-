@@ -11,6 +11,7 @@ import Modal from '@/components/ui/Modal';
 import Button from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import VehiclesEditor, { type VehicleDraft } from '@/components/ui/VehiclesEditor';
+import AdminTagBadges from '@/components/admin-tags/AdminTagBadges';
 
 type ResidentFilter = 'owner' | 'tenant' | 'unspecified';
 const FILTER_OPTIONS: { id: ResidentFilter; label: string; emoji: string }[] = [
@@ -362,6 +363,8 @@ export default function AdminUsersPage() {
                       <span className="font-semibold text-sm text-gray-900 truncate">{u.full_name}</span>
                       {isSelf && <span className="text-[10px] font-bold bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">YOU</span>}
                       {u.role === 'admin' && <span className="text-[10px] font-bold bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full">ADMIN</span>}
+                      <AdminTagBadges profileId={u.id} size="xs" />
+
                       {u.is_bot && <span className="inline-flex items-center gap-0.5 text-[10px] font-bold bg-[#1B5E20] text-white px-2 py-0.5 rounded-full"><Bot size={10} />BOT</span>}
                       {u.resident_type ? (
                         <button

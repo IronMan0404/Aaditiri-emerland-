@@ -31,11 +31,15 @@ Cost estimates are in INR per month at 200-flat scale.
 |---|---|---|---|
 | 🔴 A — Critical | 4 | 3–4 days | ₹0/mo |
 | 🟡 B — Phase 6 | 11 | ~13 days | ₹0/mo |
-| 🟠 C — Phase 7 | 9 | ~25 days | **₹0/mo** |
+| 🟠 C — Phase 7 | 10 | ~30 days | **₹0/mo** |
 | 🔵 D — Long-term | 8 | varies | varies |
-| **Total backlog** | **32 features** | **~45 days** | **₹0/mo** |
+| **Total backlog** | **33 features** | **~50 days** | **₹0/mo** |
 
-**Note:** With C1 changed to track-only (no payment gateway), the entire backlog can be built **without introducing any paid services**. Operating cost stays at ₹0/month forever.
+**Note:** With C1 changed to track-only and the new C1b community funds spec added, the entire backlog can be built **without introducing any paid services**. Operating cost stays at ₹0/month forever.
+
+**🆕 Recent additions:**
+- **C1** now uses no-payment-gateway design (saves ₹20K/month, full spec at [`FINANCE_TRACKING_SPEC.md`](./FINANCE_TRACKING_SPEC.md))
+- **C1b** new — community internal funds with public balance sheet (full spec at [`COMMUNITY_FUNDS_SPEC.md`](./COMMUNITY_FUNDS_SPEC.md))
 
 ---
 
@@ -219,6 +223,41 @@ These are major features that should only be built **after** v1 has been live fo
 - No KYC delays, no GST complications, no chargeback risk
 - Bank statement is source of truth — no app/bank discrepancies
 - Easy to upgrade to payment gateway later if needed (schema supports it)
+
+---
+
+### C1b. Community internal funds — public balance sheet ⭐ ✅ SHIPPED v1
+
+**The problem:** Beyond formal monthly bills, communities collect informal money for many things — water softener AMC, Diwali decorations, common chairs, RO maintenance, Holi colors, picnics, ganpati, sports trophies. Today this is tracked in WhatsApp screenshots + Excel + Mr. Verma's notebook, and **every AGM ends with "where did this money go?" arguments**.
+
+**The solution:** A public, transparent balance-sheet system separate from formal bills. Admin creates "Funds" (named pots like "Diwali 2026", "Softener AMC 2026"), records contributions IN and spends OUT. **Every resident** sees the full ledger live — overall balance, by category, by fund, by flat. Includes:
+- Per-fund: target, progress %, contributors list, spends list, current balance
+- Flat-wise contribution grid (who paid / who didn't, color-coded)
+- Per-flat history (everything Flat A-204 has contributed across all funds)
+- Overall community balance sheet with category-wise charts
+- Cash + UPI + cheque + in-kind contribution support
+- Quick-add for cash collections (committee member walks door-to-door, marks live)
+- Reimbursement workflow (committee paid out of pocket → marked for reimbursement)
+- Anonymous contribution toggle (privacy for big donors)
+- Public discussion threads per fund (kills "where did money go" disputes forever)
+- Surplus handling on close (refund pro-rata / roll to general pool / next year)
+- Recurring fund auto-rollover (Diwali 2026 → one-click create Diwali 2027)
+- AGM-ready PDF balance sheet with charts
+- Photo gallery per fund (event proof)
+
+**📄 Full spec:** [`COMMUNITY_FUNDS_SPEC.md`](./COMMUNITY_FUNDS_SPEC.md) — 14 sections, 7-table schema, all UI wireframes, 25 API endpoints, 16 unique recommendations, decision points.
+
+**Why it's separate from C1:** C1 = mandatory monthly bills (society legal entity). C1b = informal voluntary collections (community goodwill). Different visibility (private vs public ledger), different cadence (monthly vs ad-hoc), different authority (committee vs anyone), different examples (maintenance vs Diwali sweets).
+
+**Effort:** **~5 days**
+**Cost:** **₹0/month forever**
+**Risk:** Low — pure ledger system, no payment processing, no compliance complexity
+**Dependency:** None
+**Recommended sequence:** Build alongside or right after C1 — they share UPI-receiver UI, payment-report flow, and verification UX (~30% code reuse)
+
+**Why this is a winning feature:** Trust above all. Public ledger = ends every "where did the money go" complaint forever. Replaces WhatsApp + Excel chaos with a single source of truth. Inclusive (cash + UPI + in-kind). AGM-ready in one click.
+
+**v1 shipped (Apr 2026):** Migration `20260424_community_funds.sql`, full resident UI (`/dashboard/funds`), full admin UI (`/admin/funds` + verify queue), all APIs (`/api/funds/*` and `/api/admin/funds/*`), push notifications wired. Deferred to v2: attachments gallery, comment moderation UI, recurring auto-rollover cron, CSV export. See "Implementation status" in `COMMUNITY_FUNDS_SPEC.md`.
 
 ---
 
