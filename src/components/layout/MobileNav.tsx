@@ -1,7 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Home, Calendar, Bookmark, Radio, Images, MoreHorizontal } from 'lucide-react';
+import { Home, Calendar, Bookmark, Radio, Wallet, MoreHorizontal } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import MoreSheet from './MoreSheet';
@@ -9,11 +9,15 @@ import MoreSheet from './MoreSheet';
 // Per customer feedback (Apr 2026): pruned the bottom bar from 9 noisy tabs
 // down to 5 high-traffic ones. Secondary destinations (News, Inbox, Community,
 // Profile, Admin, Sign-out) live behind the "More" tab in a bottom sheet.
+//
+// Apr 2026 follow-up: swapped Gallery → Funds. Gallery is passive browsing
+// (still reachable via More), whereas Funds is transactional (residents check
+// their contributions, admins verify pending ones — both happen weekly).
 const navItems = [
   { href: '/dashboard', icon: Home, label: 'Home' },
   { href: '/dashboard/events', icon: Calendar, label: 'Events' },
   { href: '/dashboard/bookings', icon: Bookmark, label: 'Book' },
-  { href: '/dashboard/gallery', icon: Images, label: 'Gallery' },
+  { href: '/dashboard/funds', icon: Wallet, label: 'Funds' },
   { href: '/dashboard/broadcasts', icon: Radio, label: 'Alerts' },
 ];
 
@@ -25,6 +29,7 @@ const moreRoutes = [
   '/dashboard/messages',
   '/dashboard/community',
   '/dashboard/clubhouse',
+  '/dashboard/gallery',
   '/dashboard/issues',
   '/dashboard/profile',
 ];

@@ -43,7 +43,13 @@ export type AdminAuditTargetType =
   | 'announcement'
   | 'event'
   | 'broadcast'
-  | 'photo';
+  | 'photo'
+  | 'community_fund'
+  | 'fund_contribution'
+  | 'fund_spend'
+  | 'fund_refund'
+  | 'admin_tag'
+  | 'profile_admin_tag';
 
 export interface LogAdminActionInput {
   actor: {

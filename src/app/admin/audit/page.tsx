@@ -49,6 +49,8 @@ const TARGET_TYPES = [
   'profile', 'booking', 'clubhouse_subscription', 'clubhouse_facility',
   'clubhouse_tier', 'clubhouse_pass', 'issue', 'announcement',
   'event', 'broadcast', 'photo',
+  'community_fund', 'fund_contribution', 'fund_spend', 'fund_refund',
+  'admin_tag', 'profile_admin_tag',
 ] as const;
 
 export default function AdminAuditPage() {
