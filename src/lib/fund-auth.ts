@@ -31,7 +31,7 @@ export async function requireAuth() {
   }
   const { data: profile } = await supabase
     .from('profiles')
-    .select('id, role, full_name, flat_number, email')
+    .select('id, role, full_name, flat_number, email, resident_type, is_approved, inviter_id')
     .eq('id', user.id)
     .single();
   if (!profile) {
