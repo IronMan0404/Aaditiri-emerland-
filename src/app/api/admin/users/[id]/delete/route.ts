@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
 import { createAdminSupabaseClient, isAdminClientConfigured } from '@/lib/supabase-admin';
+import { logAdminAction } from '@/lib/admin-audit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -37,7 +38,7 @@ export async function POST(
   }
   const { data: me } = await supabase
     .from('profiles')
-    .select('id, role')
+    .select('id, role, email, full_name')
     .eq('id', caller.id)
     .single();
   if (!me || me.role !== 'admin') {
@@ -50,10 +51,11 @@ export async function POST(
     );
   }
 
-  // Look up the target so the response can echo something useful.
+  // Look up the target so the response can echo something useful and so
+  // we can snapshot the row in the audit log before the cascade wipes it.
   const { data: target } = await supabase
     .from('profiles')
-    .select('id, email, full_name')
+    .select('*')
     .eq('id', id)
     .single();
 
@@ -79,6 +81,17 @@ export async function POST(
       { status: 500 },
     );
   }
+
+  await logAdminAction({
+    actor: { id: me.id, email: me.email, name: me.full_name },
+    action: 'delete',
+    targetType: 'profile',
+    targetId: id,
+    targetLabel: target?.full_name ?? target?.email ?? id,
+    before: target ?? null,
+    after: null,
+    request: req,
+  });
 
   return NextResponse.json({
     ok: true,

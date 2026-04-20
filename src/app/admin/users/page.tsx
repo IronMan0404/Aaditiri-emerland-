@@ -5,6 +5,7 @@ import toast from 'react-hot-toast';
 import { createClient } from '@/lib/supabase';
 import { useAuth } from '@/hooks/useAuth';
 import { format } from 'date-fns';
+import { safeImageUrl } from '@/lib/safe-url';
 import type { Profile } from '@/types';
 import Modal from '@/components/ui/Modal';
 import Button from '@/components/ui/Button';
@@ -347,11 +348,12 @@ export default function AdminUsersPage() {
             {displayed.map((u) => {
               const initials = u.full_name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
               const isSelf = currentAdmin?.id === u.id;
+              const safeAvatar = safeImageUrl(u.avatar_url);
               return (
                 <div key={u.id} className={`bg-white rounded-xl p-4 shadow-sm flex items-center gap-3 ${!u.is_approved ? 'border-l-4 border-amber-400' : ''}`}>
-                  {u.avatar_url ? (
+                  {safeAvatar ? (
                     // eslint-disable-next-line @next/next/no-img-element
-                    <img src={u.avatar_url} alt="" className="w-11 h-11 rounded-full object-cover flex-shrink-0" />
+                    <img src={encodeURI(safeAvatar)} alt="" className="w-11 h-11 rounded-full object-cover flex-shrink-0" />
                   ) : (
                     <div className="w-11 h-11 rounded-full bg-green-100 text-[#1B5E20] flex items-center justify-center font-bold text-sm flex-shrink-0">{initials}</div>
                   )}

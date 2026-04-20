@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
 import { sendPushToUsers } from '@/lib/push';
+import { logAdminAction } from '@/lib/admin-audit';
 
 // Admin-only: reject a pending clubhouse subscription request.
 // Stores the reason on the row so the resident sees it in
@@ -25,7 +26,11 @@ export async function POST(
   const user = authRes?.user;
   if (!user) return NextResponse.json({ error: 'Not signed in' }, { status: 401 });
 
-  const { data: me } = await supabase.from('profiles').select('role').eq('id', user.id).single();
+  const { data: me } = await supabase
+    .from('profiles')
+    .select('id, role, email, full_name')
+    .eq('id', user.id)
+    .single();
   if (!me || me.role !== 'admin') {
     return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
   }
@@ -64,6 +69,18 @@ export async function POST(
     })
     .eq('id', sub.id);
   if (updErr) return NextResponse.json({ error: updErr.message }, { status: 500 });
+
+  await logAdminAction({
+    actor: { id: me.id, email: me.email, name: me.full_name },
+    action: 'update',
+    targetType: 'clubhouse_subscription',
+    targetId: sub.id,
+    targetLabel: `Flat ${sub.flat_number} - ${(sub.clubhouse_tiers as { name?: string } | null)?.name ?? 'Tier'}`,
+    reason: `Rejected: ${reason}`,
+    before: sub,
+    after: { status: 'rejected', rejected_reason: reason },
+    request: req,
+  });
 
   let push: { sent?: number; attempted?: number; skipped?: string } = { skipped: 'self' };
   if (sub.primary_user_id !== user.id) {

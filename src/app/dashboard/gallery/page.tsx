@@ -9,6 +9,7 @@ import Modal from '@/components/ui/Modal';
 import Button from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { format } from 'date-fns';
+import { safeImageUrl } from '@/lib/safe-url';
 import type { Photo } from '@/types';
 
 export default function GalleryPage() {
@@ -93,23 +94,34 @@ export default function GalleryPage() {
         <p className="text-center text-gray-400 py-12">No photos yet. Share the first one!</p>
       ) : (
         <div className="grid grid-cols-3 md:grid-cols-4 gap-1">
-          {photos.map((p) => (
+          {photos.map((p) => {
+            const src = safeImageUrl(p.url);
+            if (!src) return null;
+            return (
             <button key={p.id} onClick={() => setViewer(p)} className="aspect-square relative overflow-hidden rounded-lg group">
-              <img src={p.url} alt={p.caption || ''} className="w-full h-full object-cover transition-transform group-hover:scale-105" />
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={encodeURI(src)} alt={p.caption || ''} className="w-full h-full object-cover transition-transform group-hover:scale-105" />
               {p.caption && (
                 <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-2 opacity-0 group-hover:opacity-100 transition-opacity">
                   <p className="text-white text-xs line-clamp-1">{p.caption}</p>
                 </div>
               )}
             </button>
-          ))}
+            );
+          })}
         </div>
       )}
 
       {/* Upload Modal */}
       <Modal open={open} onClose={() => { setOpen(false); setSelected(null); setPreview(null); }} title="Share Photo">
         <form onSubmit={handleUpload} className="space-y-4">
-          {preview && <img src={preview} alt="preview" className="w-full h-48 object-cover rounded-xl" />}
+          {(() => {
+            const safePreview = safeImageUrl(preview);
+            return safePreview ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={encodeURI(safePreview)} alt="preview" className="w-full h-48 object-cover rounded-xl" />
+            ) : null;
+          })()}
           <Input label="Caption (optional)" value={caption} onChange={(e) => setCaption(e.target.value)} placeholder="Add a caption..." />
           <div className="flex gap-3">
             <Button type="button" variant="secondary" onClick={() => { setOpen(false); setSelected(null); setPreview(null); }} className="flex-1">Cancel</Button>
@@ -119,10 +131,15 @@ export default function GalleryPage() {
       </Modal>
 
       {/* Viewer */}
-      {viewer && (
+      {(() => {
+        if (!viewer) return null;
+        const safeViewerUrl = safeImageUrl(viewer.url);
+        if (!safeViewerUrl) return null;
+        return (
         <div className="fixed inset-0 bg-black/95 z-50 flex flex-col items-center justify-center p-4" onClick={() => setViewer(null)}>
           <button className="absolute top-4 right-4 text-white" onClick={() => setViewer(null)}><X size={28} /></button>
-          <img src={viewer.url} alt={viewer.caption || ''} className="max-w-full max-h-[75vh] object-contain rounded-lg" onClick={(e) => e.stopPropagation()} />
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={encodeURI(safeViewerUrl)} alt={viewer.caption || ''} className="max-w-full max-h-[75vh] object-contain rounded-lg" onClick={(e) => e.stopPropagation()} />
           {viewer.caption && <p className="text-white/80 text-sm mt-3">{viewer.caption}</p>}
           <p className="text-white/50 text-xs mt-1">by {(viewer.profiles as any)?.full_name} · {format(new Date(viewer.created_at), 'dd MMM yyyy')}</p>
           {(isAdmin || viewer.user_id === profile?.id) && (
@@ -136,7 +153,8 @@ export default function GalleryPage() {
             </button>
           )}
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 }

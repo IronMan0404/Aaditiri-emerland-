@@ -16,6 +16,7 @@ import {
 import toast from 'react-hot-toast';
 import { createClient } from '@/lib/supabase';
 import { useAuth } from '@/hooks/useAuth';
+import { safeImageUrl } from '@/lib/safe-url';
 import type {
   Profile,
   Vehicle,
@@ -296,6 +297,7 @@ function ResidentCard({
   const totalExtras = vehicles.length + family.length + pets.length;
   const hasContact = Boolean(profile.phone || profile.email);
   const canExpand = totalExtras > 0 || hasContact;
+  const safeAvatar = safeImageUrl(profile.avatar_url);
 
   return (
     <div className="bg-white rounded-xl shadow-sm overflow-hidden">
@@ -305,9 +307,9 @@ function ResidentCard({
         disabled={!canExpand}
         className="w-full px-4 py-3 flex items-center gap-3 text-left hover:bg-gray-50 transition-colors disabled:cursor-default disabled:hover:bg-white"
       >
-        {profile.avatar_url ? (
+        {safeAvatar ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={profile.avatar_url} alt="" className="w-11 h-11 rounded-full object-cover flex-shrink-0" />
+          <img src={encodeURI(safeAvatar)} alt="" className="w-11 h-11 rounded-full object-cover flex-shrink-0" />
         ) : (
           <div className="w-11 h-11 rounded-full bg-green-100 text-[#1B5E20] flex items-center justify-center font-bold text-sm flex-shrink-0">
             {initials}

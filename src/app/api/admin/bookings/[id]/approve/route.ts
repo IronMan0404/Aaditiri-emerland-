@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
 import { sendEmail, isEmailConfigured } from '@/lib/email';
 import { buildIcs, googleCalendarUrl, outlookCalendarUrl, parseTimeRange, istDateToUtc } from '@/lib/ics';
+import { logAdminAction } from '@/lib/admin-audit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -18,7 +19,11 @@ export async function POST(
   const user = authRes?.user;
   if (!user) return NextResponse.json({ error: 'Not signed in' }, { status: 401 });
 
-  const { data: me } = await supabase.from('profiles').select('id, role').eq('id', user.id).single();
+  const { data: me } = await supabase
+    .from('profiles')
+    .select('id, role, email, full_name')
+    .eq('id', user.id)
+    .single();
   if (!me || me.role !== 'admin') {
     return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
   }
@@ -37,6 +42,18 @@ export async function POST(
   if (updateErr) {
     return NextResponse.json({ error: `Couldn't approve: ${updateErr.message}` }, { status: 500 });
   }
+
+  await logAdminAction({
+    actor: { id: me.id, email: me.email, name: me.full_name },
+    action: 'update',
+    targetType: 'booking',
+    targetId: booking.id,
+    targetLabel: `${booking.facility} on ${booking.date} ${booking.time_slot}`,
+    reason: 'Approved booking',
+    before: { status: booking.status },
+    after: { status: 'approved' },
+    request: req,
+  });
 
   if (!isEmailConfigured()) {
     return NextResponse.json({ ok: true, approved: true, email: { sent: false, reason: 'provider_disabled' } });
