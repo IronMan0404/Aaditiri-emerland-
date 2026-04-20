@@ -6,12 +6,16 @@ export interface Profile {
   avatar_url?: string;
   flat_number?: string;
   vehicle_number?: string;
-  resident_type?: 'owner' | 'tenant';
+  resident_type?: 'owner' | 'tenant' | 'family';
   role: 'admin' | 'user';
   created_at: string;
   is_approved: boolean;
   is_bot?: boolean;
   whatsapp_opt_in?: boolean;
+  // Family-member fields. Only populated when resident_type='family'.
+  // See supabase/migrations/20260427_family_member_invites.sql.
+  inviter_id?: string | null;
+  family_relation?: 'spouse' | 'son' | 'daughter' | 'parent' | 'sibling' | 'in_law' | 'other' | null;
 }
 
 export interface Announcement {
@@ -119,6 +123,15 @@ export interface FamilyMember {
   age?: number | null;
   phone?: string | null;
   created_at: string;
+  // Login-account linkage. See migration 20260427.
+  // - email: captured at invite time, also used for resend
+  // - account_profile_id: set after invite acceptance — points to the
+  //   live profiles row for this family member's login
+  // - invitation_id: set while an invite is pending, cleared on
+  //   accept/revoke/expire
+  email?: string | null;
+  account_profile_id?: string | null;
+  invitation_id?: string | null;
 }
 
 export type PetSpecies = 'dog' | 'cat' | 'bird' | 'other';

@@ -87,19 +87,34 @@ export default function AdminUsersPage() {
   };
   useEffect(() => { fetchUsers(); }, []);
 
-  const pending = useMemo(() => users.filter(u => !u.is_approved), [users]);
+  // Family members live on the SAME profiles table but should never
+  // appear in the main "Residents" list — admins want a clean per-flat
+  // count (one household = one row) and family invites are managed by
+  // the primary resident, not by admins. We split here so every
+  // downstream useMemo (pending, typeCounts, displayed) only sees
+  // primaries. Family members get their own dedicated section.
+  const primaryUsers = useMemo(
+    () => users.filter((u) => u.resident_type !== 'family'),
+    [users],
+  );
+  const familyUsers = useMemo(
+    () => users.filter((u) => u.resident_type === 'family'),
+    [users],
+  );
+
+  const pending = useMemo(() => primaryUsers.filter(u => !u.is_approved), [primaryUsers]);
 
   const typeCounts = useMemo(() => {
-    const base = tab === 'pending' ? pending : users;
+    const base = tab === 'pending' ? pending : primaryUsers;
     return {
       owner: base.filter(u => u.resident_type === 'owner').length,
       tenant: base.filter(u => u.resident_type === 'tenant').length,
       unspecified: base.filter(u => !u.resident_type).length,
     };
-  }, [users, pending, tab]);
+  }, [primaryUsers, pending, tab]);
 
   const displayed = useMemo(() => {
-    const base = tab === 'pending' ? pending : users;
+    const base = tab === 'pending' ? pending : primaryUsers;
     const q = search.trim().toLowerCase();
     return base.filter((u) => {
       if (residentFilter.size > 0) {
@@ -115,7 +130,7 @@ export default function AdminUsersPage() {
         platesText.includes(q)
       );
     });
-  }, [users, pending, tab, residentFilter, search, vehiclesByUser]);
+  }, [primaryUsers, pending, tab, residentFilter, search, vehiclesByUser]);
 
   function toggleResidentFilter(id: ResidentFilter) {
     setResidentFilter((prev) => {
@@ -342,7 +357,7 @@ export default function AdminUsersPage() {
         <>
           {hasActiveFilters && (
             <p className="text-xs text-gray-400 mb-2">
-              Showing {displayed.length} of {tab === 'pending' ? pending.length : users.length}
+              Showing {displayed.length} of {tab === 'pending' ? pending.length : primaryUsers.length}
             </p>
           )}
           <div className="space-y-2">
@@ -454,6 +469,57 @@ export default function AdminUsersPage() {
             })}
           </div>
         </>
+      )}
+
+      {/* Family members — separate section. These are accounts created
+          by primary residents inviting their spouse / parents / kids
+          via /dashboard/family. They live on the same profiles table
+          but should NEVER be counted toward the "residents" total
+          (one household = one row), so we render them in their own
+          collapsible block underneath. Admins can still revoke an
+          individual family member's access from here. */}
+      {!loading && familyUsers.length > 0 && (
+        <details className="mt-6 bg-white rounded-xl shadow-sm overflow-hidden" open={false}>
+          <summary className="cursor-pointer p-4 flex items-center gap-2 hover:bg-gray-50 list-none">
+            <span className="text-sm font-bold text-gray-900">👨‍👩‍👧 Family members</span>
+            <span className="text-xs font-semibold bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">{familyUsers.length}</span>
+            <span className="ml-auto text-xs text-gray-400">Invited by primary residents · auto-approved</span>
+          </summary>
+          <div className="divide-y border-t">
+            {familyUsers.map((u) => {
+              const initials = u.full_name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
+              const inviter = users.find((p) => p.id === u.inviter_id);
+              return (
+                <div key={u.id} className="p-3 flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center font-bold text-xs flex-shrink-0">{initials}</div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-semibold text-sm text-gray-900 truncate">{u.full_name}</span>
+                      <span className="text-[10px] font-bold bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full">
+                        FAMILY{u.family_relation ? ` · ${u.family_relation.replace('_', ' ')}` : ''}
+                      </span>
+                      <span className="text-[10px] font-bold bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">
+                        Flat {u.flat_number ?? '?'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-gray-400 truncate">
+                      {u.email}
+                      {inviter ? ` · invited by ${inviter.full_name}` : ''}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => openDelete(u)}
+                    title="Remove access"
+                    className="p-1.5 rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-600 transition-colors"
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </details>
       )}
 
       {/* Edit User modal */}

@@ -38,7 +38,7 @@ export default function ProfilePage() {
           .order('created_at'),
         supabase
           .from('family_members')
-          .select('id, full_name, relation, gender, age, phone')
+          .select('id, full_name, relation, gender, age, phone, email, account_profile_id, invitation_id')
           .eq('user_id', profile.id)
           .order('created_at'),
         supabase
