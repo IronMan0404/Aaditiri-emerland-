@@ -44,7 +44,13 @@ export default function MobileNav() {
   // is a safety net for back-button navigation.
   useEffect(() => { setMoreOpen(false); }, [pathname]);
 
-  const moreActive = moreRoutes.some((r) => pathname === r || pathname.startsWith(r + '/'));
+  // Highlight the More tab when the user is on any "secondary" route — both
+  // the resident-side ones (announcements, profile, etc.) AND every admin
+  // route, because the entire admin section is now nested inside the More
+  // sheet on mobile.
+  const moreActive =
+    moreRoutes.some((r) => pathname === r || pathname.startsWith(r + '/')) ||
+    pathname.startsWith('/admin');
 
   return (
     <>

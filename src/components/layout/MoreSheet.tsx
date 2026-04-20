@@ -2,7 +2,22 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useMemo } from 'react';
-import { Megaphone, MessageSquare, Users, User, LogOut, Shield, X, Newspaper, AlertCircle, KeyRound } from 'lucide-react';
+import {
+  Megaphone,
+  MessageSquare,
+  Users,
+  User,
+  LogOut,
+  Shield,
+  X,
+  Newspaper,
+  AlertCircle,
+  KeyRound,
+  ScanLine,
+  Bot,
+  Settings,
+  Images,
+} from 'lucide-react';
 import { createClient } from '@/lib/supabase';
 import { useAuth } from '@/hooks/useAuth';
 
@@ -11,10 +26,22 @@ interface MoreSheetProps {
   onClose: () => void;
 }
 
+interface SheetItem {
+  href: string;
+  // Lucide icon component. Typed as a generic functional component so we
+  // don't pull in lucide-react's internal type, which has been unstable
+  // across versions.
+  icon: React.ComponentType<{ size?: number; className?: string }>;
+  label: string;
+  desc: string;
+  badge?: number;
+}
+
 // Bottom-sheet "More" menu shown on mobile when the user taps the 5th nav slot.
 // Houses the secondary navigation items that didn't make the cut for the
 // primary 5-tab bottom bar (News, Inbox, Community, Profile, etc.) plus
-// admin and sign-out shortcuts.
+// the entire admin section so admins on phones don't have to bounce through
+// the Admin Dashboard landing page to reach Issues Board / Validate Pass / etc.
 export default function MoreSheet({ open, onClose }: MoreSheetProps) {
   const pathname = usePathname();
   const router = useRouter();
@@ -30,8 +57,9 @@ export default function MoreSheet({ open, onClose }: MoreSheetProps) {
     return () => { document.body.style.overflow = original; };
   }, [open]);
 
-  const items = [
-    { href: '/dashboard/news', icon: Newspaper, label: 'News', desc: 'Hyderabad weather, traffic & daily updates' },
+  // Resident-side items not already on the bottom 5-tab bar.
+  const items: SheetItem[] = [
+    { href: '/dashboard/news', icon: Newspaper, label: 'News', desc: 'Local weather, traffic & daily updates' },
     { href: '/dashboard/announcements', icon: Megaphone, label: 'Announcements', desc: 'Society notices from admin' },
     { href: '/dashboard/messages', icon: MessageSquare, label: 'Inbox', desc: 'Direct messages from admin', badge: unreadMessages },
     { href: '/dashboard/community', icon: Users, label: 'Community', desc: 'Residents directory' },
@@ -40,10 +68,57 @@ export default function MoreSheet({ open, onClose }: MoreSheetProps) {
     { href: '/dashboard/profile', icon: User, label: 'Profile', desc: 'Your account & family' },
   ];
 
+  // Admin-side items. Mirrors the Admin block in the desktop Sidebar so
+  // admins get full mobile parity. Hidden entirely for non-admins.
+  const adminItems: SheetItem[] = [
+    { href: '/admin', icon: Shield, label: 'Admin Dashboard', desc: 'KPIs & quick actions' },
+    { href: '/admin/users', icon: Settings, label: 'Manage Users', desc: 'Approve, edit, delete residents' },
+    { href: '/admin/issues', icon: AlertCircle, label: 'Issues Board', desc: 'Kanban + analytics' },
+    { href: '/admin/clubhouse', icon: KeyRound, label: 'Clubhouse Admin', desc: 'Tiers, subscriptions & catalog' },
+    { href: '/admin/clubhouse/validate', icon: ScanLine, label: 'Validate Pass', desc: 'Scan QR to admit guests' },
+    { href: '/admin/messages', icon: Bot, label: 'Bot Messages', desc: 'Broadcast as Aaditri Bot' },
+    { href: '/admin/updates', icon: Newspaper, label: 'Community Updates', desc: 'Post categorised updates' },
+    { href: '/admin/gallery', icon: Images, label: 'Gallery Admin', desc: 'Moderate community photos' },
+  ];
+
   async function handleSignOut() {
     onClose();
     await supabase.auth.signOut();
     router.push('/auth/login');
+  }
+
+  function isActive(href: string) {
+    if (pathname === href) return true;
+    if (href === '/dashboard' || href === '/admin') return false;
+    return pathname.startsWith(href + '/') || pathname.startsWith(href);
+  }
+
+  function renderItem({ href, icon: Icon, label, desc, badge }: SheetItem) {
+    const active = isActive(href);
+    return (
+      <Link
+        key={href}
+        href={href}
+        onClick={onClose}
+        className={`flex items-center gap-3 px-3 py-3 rounded-lg ${active ? 'bg-green-50' : 'hover:bg-gray-50'}`}
+      >
+        <span className={`w-9 h-9 rounded-xl flex items-center justify-center ${active ? 'bg-[#1B5E20] text-white' : 'bg-gray-100 text-gray-600'}`}>
+          <Icon size={18} />
+        </span>
+        <span className="flex-1 min-w-0">
+          <span className={`block text-sm font-semibold truncate ${active ? 'text-[#1B5E20]' : 'text-gray-900'}`}>{label}</span>
+          <span className="block text-xs text-gray-500 truncate">{desc}</span>
+        </span>
+        {!!badge && badge > 0 && (
+          <span
+            suppressHydrationWarning
+            className="min-w-[20px] h-5 px-1.5 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center shrink-0"
+          >
+            {badge > 99 ? '99+' : badge}
+          </span>
+        )}
+      </Link>
+    );
   }
 
   return (
@@ -59,14 +134,15 @@ export default function MoreSheet({ open, onClose }: MoreSheetProps) {
         className="absolute inset-0 bg-black/40"
       />
 
-      {/* Sheet */}
+      {/* Sheet — caps at 85vh and scrolls internally so the longer admin
+          section can't push Sign Out off the bottom of the viewport. */}
       <div
         role="dialog"
         aria-modal="true"
         aria-label="More menu"
-        className={`absolute bottom-0 left-0 right-0 bg-white rounded-t-2xl shadow-2xl safe-bottom transition-transform duration-200 ${open ? 'translate-y-0' : 'translate-y-full'}`}
+        className={`absolute bottom-0 left-0 right-0 bg-white rounded-t-2xl shadow-2xl safe-bottom transition-transform duration-200 max-h-[85vh] flex flex-col ${open ? 'translate-y-0' : 'translate-y-full'}`}
       >
-        <div className="flex items-center justify-between px-5 pt-4 pb-2">
+        <div className="flex items-center justify-between px-5 pt-4 pb-2 shrink-0">
           <h2 className="text-base font-bold text-gray-900">More</h2>
           <button
             type="button"
@@ -78,52 +154,28 @@ export default function MoreSheet({ open, onClose }: MoreSheetProps) {
           </button>
         </div>
 
-        <div className="px-3 pb-3">
+        {/* Scrollable body */}
+        <div className="px-3 pb-3 overflow-y-auto flex-1">
           <div className="divide-y divide-gray-100">
-            {items.map(({ href, icon: Icon, label, desc, badge }) => {
-              const active = pathname === href || (href !== '/dashboard' && pathname.startsWith(href));
-              return (
-                <Link
-                  key={href}
-                  href={href}
-                  onClick={onClose}
-                  className={`flex items-center gap-3 px-3 py-3 rounded-lg ${active ? 'bg-green-50' : 'hover:bg-gray-50'}`}
-                >
-                  <span className={`w-9 h-9 rounded-xl flex items-center justify-center ${active ? 'bg-[#1B5E20] text-white' : 'bg-gray-100 text-gray-600'}`}>
-                    <Icon size={18} />
-                  </span>
-                  <span className="flex-1">
-                    <span className={`block text-sm font-semibold ${active ? 'text-[#1B5E20]' : 'text-gray-900'}`}>{label}</span>
-                    <span className="block text-xs text-gray-500">{desc}</span>
-                  </span>
-                  {!!badge && badge > 0 && (
-                    <span
-                      suppressHydrationWarning
-                      className="min-w-[20px] h-5 px-1.5 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center"
-                    >
-                      {badge > 99 ? '99+' : badge}
-                    </span>
-                  )}
-                </Link>
-              );
-            })}
+            {items.map(renderItem)}
+          </div>
 
-            {isAdmin && (
-              <Link
-                href="/admin"
-                onClick={onClose}
-                className="flex items-center gap-3 px-3 py-3 rounded-lg hover:bg-gray-50"
-              >
-                <span className="w-9 h-9 rounded-xl bg-yellow-100 text-yellow-700 flex items-center justify-center">
-                  <Shield size={18} />
+          {isAdmin && (
+            <>
+              <div className="flex items-center gap-2 px-3 pt-4 pb-1">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Admin</span>
+                <span className="flex-1 h-px bg-gray-100" />
+                <span className="text-[10px] font-bold bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full">
+                  ADMIN
                 </span>
-                <span className="flex-1">
-                  <span className="block text-sm font-semibold text-gray-900">Admin Dashboard</span>
-                  <span className="block text-xs text-gray-500">Manage users, content & settings</span>
-                </span>
-              </Link>
-            )}
+              </div>
+              <div className="divide-y divide-gray-100">
+                {adminItems.map(renderItem)}
+              </div>
+            </>
+          )}
 
+          <div className="pt-2 mt-2 border-t border-gray-100">
             <button
               type="button"
               onClick={handleSignOut}

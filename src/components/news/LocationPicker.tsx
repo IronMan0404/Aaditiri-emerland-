@@ -4,10 +4,13 @@ import { MapPin, Search, X, Loader2, LocateFixed, Check, AlertTriangle } from 'l
 import { describeDenial, type GeoDenialReason, type ResolvedLocation } from '@/hooks/useGeoLocation';
 
 interface SearchHit {
+  locality: string;
   city: string;
   region?: string;
   country?: string;
   countryCode?: string;
+  type?: string;
+  displayName?: string;
   lat: number;
   lon: number;
 }
@@ -22,9 +25,32 @@ interface Props {
   onReset: () => void;
 }
 
-// A small \ud83d\udccd pill that shows the current city, and opens a popover with a
-// city-search box + a "use my location" button. Designed to feel like
-// Google's location picker but smaller \u2014 fits in the page header.
+// Human-friendly label for an OSM place type. Returns null for generic /
+// unknown types so we don't show "Unknown" in the UI.
+function placeTypeLabel(type?: string): string | null {
+  if (!type) return null;
+  const map: Record<string, string> = {
+    village: 'Village',
+    hamlet: 'Hamlet',
+    town: 'Town',
+    suburb: 'Suburb',
+    neighbourhood: 'Neighbourhood',
+    city: 'City',
+    municipality: 'Municipality',
+    administrative: 'Area',
+    locality: 'Locality',
+    quarter: 'Quarter',
+    residential: 'Residential area',
+    farm: 'Farm',
+    isolated_dwelling: 'Settlement',
+  };
+  return map[type] ?? null;
+}
+
+// A small pill that shows the current locality (with city / region as a
+// secondary subtitle), and opens a popover with a search box + a "use my
+// location" button. Designed to feel like Google's location picker but
+// smaller \u2014 fits in the page header.
 export default function LocationPicker({ current, status, denialReason, onPickCoords, onUseGeolocation, onReset }: Props) {
   const denialMessage = describeDenial(denialReason ?? null);
   const [open, setOpen] = useState(false);
@@ -43,7 +69,8 @@ export default function LocationPicker({ current, status, denialReason, onPickCo
     return () => document.removeEventListener('mousedown', onDoc);
   }, [open]);
 
-  // Debounced search against /api/news/geocode.
+  // Debounced search against /api/news/geocode (now Nominatim-backed, so
+  // villages, suburbs, and small localities are searchable).
   useEffect(() => {
     if (q.trim().length < 2) { setHits([]); return; }
     const t = setTimeout(async () => {
@@ -61,11 +88,20 @@ export default function LocationPicker({ current, status, denialReason, onPickCo
     return () => clearTimeout(t);
   }, [q]);
 
+  // Primary label: the locality if we have one (e.g. "Lingampally"),
+  // otherwise the city. The pill stays compact; the full place name is in
+  // the secondary `title` tooltip and in the popover header.
+  const primaryLabel = current.locality || current.city;
+  const secondaryParts = [current.locality && current.locality !== current.city ? current.city : null, current.region]
+    .filter(Boolean);
+  const secondary = secondaryParts.join(', ');
+
   return (
     <div ref={popRef} className="relative inline-block">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
+        title={current.displayName || primaryLabel}
         className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white border border-gray-200 text-xs font-semibold text-gray-700 hover:border-[#1B5E20] hover:text-[#1B5E20] transition shadow-sm"
         aria-haspopup="dialog"
         aria-expanded={open}
@@ -75,7 +111,7 @@ export default function LocationPicker({ current, status, denialReason, onPickCo
         ) : (
           <MapPin size={12} className={current.source === 'fallback' ? 'text-gray-400' : 'text-[#1B5E20]'} />
         )}
-        <span className="max-w-[120px] sm:max-w-[140px] truncate">{current.city}</span>
+        <span className="max-w-[140px] sm:max-w-[180px] truncate">{primaryLabel}</span>
         {current.source === 'geolocation' && <span className="text-[9px] text-[#1B5E20] font-bold">AUTO</span>}
       </button>
 
@@ -85,12 +121,22 @@ export default function LocationPicker({ current, status, denialReason, onPickCo
         // of the row (the page header stacks vertically on phones, so the pill
         // sits flush-left, not flush-right). On sm+ desktops it goes to the
         // right of the trigger as before.
-        <div className="absolute left-0 sm:left-auto sm:right-0 mt-2 w-[calc(100vw-1.5rem)] max-w-xs sm:w-72 bg-white rounded-xl shadow-lg border border-gray-200 z-30 overflow-hidden">
-          <div className="p-3 border-b border-gray-100 flex items-center justify-between">
-            <span className="text-xs font-semibold text-gray-600 uppercase tracking-wider">Change location</span>
-            <button onClick={() => setOpen(false)} className="text-gray-400 hover:text-gray-600" aria-label="Close">
-              <X size={14} />
-            </button>
+        <div className="absolute left-0 sm:left-auto sm:right-0 mt-2 w-[calc(100vw-1.5rem)] max-w-xs sm:w-80 bg-white rounded-xl shadow-lg border border-gray-200 z-30 overflow-hidden">
+          <div className="p-3 border-b border-gray-100">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-xs font-semibold text-gray-600 uppercase tracking-wider">Change location</span>
+              <button onClick={() => setOpen(false)} className="text-gray-400 hover:text-gray-600" aria-label="Close">
+                <X size={14} />
+              </button>
+            </div>
+            <div className="text-sm font-semibold text-gray-900 truncate" title={current.displayName || primaryLabel}>
+              {primaryLabel}
+            </div>
+            {(secondary || placeTypeLabel(current.type)) && (
+              <div className="text-[11px] text-gray-500 truncate">
+                {[placeTypeLabel(current.type), secondary].filter(Boolean).join(' \u00b7 ')}
+              </div>
+            )}
           </div>
 
           <div className="p-3 space-y-2">
@@ -125,7 +171,7 @@ export default function LocationPicker({ current, status, denialReason, onPickCo
                 type="text"
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
-                placeholder="Search city, e.g. Bengaluru"
+                placeholder="Search city, village, or area"
                 className="w-full pl-9 pr-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:border-[#1B5E20] focus:outline-none focus:ring-1 focus:ring-[#1B5E20]"
                 autoFocus
               />
@@ -138,14 +184,27 @@ export default function LocationPicker({ current, status, denialReason, onPickCo
               {!searching && q.trim().length >= 2 && hits.length === 0 && (
                 <p className="text-xs text-gray-400 px-3 py-2">No matches</p>
               )}
-              {hits.map((h) => {
+              {hits.map((h, idx) => {
                 const active = Math.abs(h.lat - current.lat) < 0.05 && Math.abs(h.lon - current.lon) < 0.05;
+                const subtitle = [placeTypeLabel(h.type), h.region, h.country]
+                  .filter(Boolean)
+                  .join(' \u00b7 ');
                 return (
                   <button
-                    key={`${h.city}-${h.lat}-${h.lon}`}
+                    key={`${h.locality}-${h.lat}-${h.lon}-${idx}`}
                     type="button"
                     onClick={() => {
-                      onPickCoords({ lat: h.lat, lon: h.lon, city: h.city, region: h.region, country: h.country });
+                      onPickCoords({
+                        lat: h.lat,
+                        lon: h.lon,
+                        locality: h.locality,
+                        city: h.city,
+                        region: h.region,
+                        country: h.country,
+                        countryCode: h.countryCode,
+                        type: h.type,
+                        displayName: h.displayName,
+                      });
                       setOpen(false);
                       setQ('');
                     }}
@@ -153,10 +212,15 @@ export default function LocationPicker({ current, status, denialReason, onPickCo
                   >
                     <MapPin size={12} className="text-gray-400 shrink-0" />
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold text-gray-900 truncate">{h.city}</p>
-                      <p className="text-[10px] text-gray-500 truncate">
-                        {[h.region, h.country].filter(Boolean).join(', ')}
+                      <p className="text-sm font-semibold text-gray-900 truncate">
+                        {h.locality}
+                        {h.locality !== h.city && (
+                          <span className="text-gray-500 font-normal">, {h.city}</span>
+                        )}
                       </p>
+                      {subtitle && (
+                        <p className="text-[10px] text-gray-500 truncate">{subtitle}</p>
+                      )}
                     </div>
                     {active && <Check size={14} className="text-[#1B5E20]" />}
                   </button>

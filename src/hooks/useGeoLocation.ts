@@ -6,18 +6,34 @@ import { useCallback, useEffect, useState } from 'react';
 export const HYDERABAD: ResolvedLocation = {
   lat: 17.385,
   lon: 78.4867,
+  locality: 'Hyderabad',
   city: 'Hyderabad',
   region: 'Telangana',
   country: 'India',
+  countryCode: 'IN',
+  displayName: 'Hyderabad, Telangana',
   source: 'fallback',
 };
 
 export interface ResolvedLocation {
   lat: number;
   lon: number;
+  // Most-specific human-readable place name we could resolve. This is the
+  // primary label shown in the UI \u2014 e.g. "Lingampally" or "Madhapur"
+  // instead of just "Hyderabad". Falls back to `city` when we couldn't get
+  // a finer level (city-centre coords, or Open-Meteo search hits).
+  locality: string;
+  // Parent city / town. May equal `locality` when we're already in a city centre.
   city: string;
   region?: string;
   country?: string;
+  countryCode?: string;
+  // Pre-formatted "Locality, City, Region" string from the geocode API.
+  // Use this when you want the full place name in one line.
+  displayName?: string;
+  // What kind of place locality is (suburb, village, town, hamlet, ...) \u2014
+  // optional, only used by the picker for the secondary subtitle.
+  type?: string;
   // Where we got this from \u2014 useful for the UI ("\ud83d\udccd Auto-detected" vs "Manual").
   source: 'geolocation' | 'manual' | 'fallback';
 }
@@ -58,9 +74,33 @@ function readPersisted(): PersistedLocation | null {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as PersistedLocation;
+    const parsed = JSON.parse(raw) as Partial<PersistedLocation> & {
+      lat?: number;
+      lon?: number;
+      city?: string;
+    };
     if (typeof parsed.lat !== 'number' || typeof parsed.lon !== 'number') return null;
-    return parsed;
+    // Backfill fields added in newer versions of the schema. Old persisted
+    // entries had {lat, lon, city, source, cachedAt} only \u2014 we now require
+    // `locality` and prefer a `displayName`. Fill them in from `city` so the
+    // first render after an upgrade doesn't crash.
+    const city = parsed.city ?? 'Your location';
+    const locality = parsed.locality ?? city;
+    return {
+      lat: parsed.lat,
+      lon: parsed.lon,
+      locality,
+      city,
+      region: parsed.region,
+      country: parsed.country,
+      countryCode: parsed.countryCode,
+      type: parsed.type,
+      displayName:
+        parsed.displayName ??
+        [locality, city, parsed.region].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join(', '),
+      source: parsed.source ?? 'manual',
+      cachedAt: parsed.cachedAt ?? Date.now(),
+    };
   } catch {
     return null;
   }
@@ -86,13 +126,42 @@ class ReverseGeocodeError extends Error {
 async function reverseGeocode(lat: number, lon: number): Promise<ResolvedLocation> {
   const res = await fetch(`/api/news/geocode?lat=${lat}&lon=${lon}`, { cache: 'force-cache' });
   if (!res.ok) throw new ReverseGeocodeError();
-  const json = (await res.json()) as { city?: string; region?: string; country?: string };
+  const json = (await res.json()) as {
+    locality?: string;
+    city?: string;
+    region?: string;
+    country?: string;
+    countryCode?: string;
+    type?: string;
+    displayName?: string;
+  };
+  const city = json.city || json.locality || 'Your location';
+  const locality = json.locality || city;
   return {
     lat,
     lon,
-    city: json.city || 'Your location',
+    locality,
+    city,
     region: json.region,
     country: json.country,
+    countryCode: json.countryCode,
+    type: json.type,
+    displayName: json.displayName || [locality, city, json.region].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join(', '),
+    source: 'geolocation',
+  };
+}
+
+// Coords-only fallback used when reverse geocode fails but we DO have a
+// fix from the browser. Keeps the location object well-formed so the rest
+// of the UI doesn't have to special-case missing fields.
+function coordsOnlyLocation(lat: number, lon: number): ResolvedLocation {
+  const label = `Near ${lat.toFixed(3)}, ${lon.toFixed(3)}`;
+  return {
+    lat,
+    lon,
+    locality: label,
+    city: label,
+    displayName: label,
     source: 'geolocation',
   };
 }
@@ -183,7 +252,7 @@ export function useGeoLocation() {
         } catch (err) {
           // We have coords but no city name. Show coords-as-location and
           // surface the reason so the picker can hint at retrying.
-          const fallback: ResolvedLocation = { lat, lon, city: 'Your location', source: 'geolocation' };
+          const fallback = coordsOnlyLocation(lat, lon);
           writePersisted(fallback);
           window.localStorage.setItem(PROMPT_FLAG, '1');
           setState({
@@ -220,7 +289,7 @@ export function useGeoLocation() {
         setState({ location: resolved, status: 'ready', hydrating: false, denialReason: null });
         return resolved;
       } catch (err) {
-        const fallback: ResolvedLocation = { lat, lon, city: 'Your location', source: 'geolocation' };
+        const fallback = coordsOnlyLocation(lat, lon);
         writePersisted(fallback);
         setState({
           location: fallback,

@@ -40,12 +40,28 @@ export default function NewsPage() {
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 sm:gap-3 mb-4">
         <div className="min-w-0">
           <h1 className="text-xl sm:text-2xl font-bold text-gray-900 leading-tight">News</h1>
-          <p className="text-xs sm:text-sm text-gray-500 mt-0.5">
-            Live updates for{' '}
-            <span className="font-semibold text-gray-700">{geo.location.city}</span>
-            {geo.status === 'loading' && <span className="ml-1 text-[#1B5E20]">· locating…</span>}
-            {geo.status === 'denied' && <span className="ml-1 text-gray-400">· using community default</span>}
-          </p>
+          {(() => {
+            // Build a compact "Locality, City" or "Locality, Region" label.
+            // We avoid the full displayName (which can include country) so
+            // the subtitle stays one line on phones.
+            const primary = geo.location.locality || geo.location.city;
+            const parent =
+              geo.location.locality && geo.location.locality !== geo.location.city
+                ? geo.location.city
+                : geo.location.region;
+            const label = [primary, parent].filter(Boolean).join(', ');
+            return (
+              <p
+                className="text-xs sm:text-sm text-gray-500 mt-0.5 truncate"
+                title={geo.location.displayName || label}
+              >
+                Live updates for{' '}
+                <span className="font-semibold text-gray-700">{label}</span>
+                {geo.status === 'loading' && <span className="ml-1 text-[#1B5E20]">· locating…</span>}
+                {geo.status === 'denied' && <span className="ml-1 text-gray-400">· using community default</span>}
+              </p>
+            );
+          })()}
         </div>
         {/* On mobile: pill aligns to the start under the subtitle.
             On desktop: pill sits at top-right. */}
