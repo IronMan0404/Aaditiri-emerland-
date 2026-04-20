@@ -17,6 +17,7 @@ import {
   Bot,
   Settings,
   Images,
+  Wallet,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase';
 import { useAuth } from '@/hooks/useAuth';
@@ -64,6 +65,7 @@ export default function MoreSheet({ open, onClose }: MoreSheetProps) {
     { href: '/dashboard/messages', icon: MessageSquare, label: 'Inbox', desc: 'Direct messages from admin', badge: unreadMessages },
     { href: '/dashboard/community', icon: Users, label: 'Community', desc: 'Residents directory' },
     { href: '/dashboard/clubhouse', icon: KeyRound, label: 'Clubhouse', desc: 'Subscription, facilities & passes' },
+    { href: '/dashboard/gallery', icon: Images, label: 'Gallery', desc: 'Community photos & event albums' },
     { href: '/dashboard/issues', icon: AlertCircle, label: 'Issues', desc: 'Report a problem & track tickets' },
     { href: '/dashboard/profile', icon: User, label: 'Profile', desc: 'Your account & family' },
   ];
@@ -76,6 +78,7 @@ export default function MoreSheet({ open, onClose }: MoreSheetProps) {
     { href: '/admin/issues', icon: AlertCircle, label: 'Issues Board', desc: 'Kanban + analytics' },
     { href: '/admin/clubhouse', icon: KeyRound, label: 'Clubhouse Admin', desc: 'Tiers, subscriptions & catalog' },
     { href: '/admin/clubhouse/validate', icon: ScanLine, label: 'Validate Pass', desc: 'Scan QR to admit guests' },
+    { href: '/admin/funds', icon: Wallet, label: 'Manage Funds', desc: 'Verify contributions & record spends' },
     { href: '/admin/messages', icon: Bot, label: 'Bot Messages', desc: 'Broadcast as Aaditri Bot' },
     { href: '/admin/updates', icon: Newspaper, label: 'Community Updates', desc: 'Post categorised updates' },
     { href: '/admin/gallery', icon: Images, label: 'Gallery Admin', desc: 'Moderate community photos' },

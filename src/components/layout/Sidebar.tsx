@@ -1,7 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Megaphone, Calendar, Bookmark, Images, Radio, User, Home, Settings, Newspaper, LogOut, Shield, MessageSquare, Bot, Users, AlertCircle, KeyRound, ScanLine } from 'lucide-react';
+import { Megaphone, Calendar, Bookmark, Images, Radio, User, Home, Settings, Newspaper, LogOut, Shield, MessageSquare, Bot, Users, AlertCircle, KeyRound, ScanLine, Wallet } from 'lucide-react';
 import { createClient } from '@/lib/supabase';
 import { useAuth } from '@/hooks/useAuth';
 import { useEffect, useMemo } from 'react';
@@ -15,6 +15,7 @@ const navItems = [
   { href: '/dashboard/events', icon: Calendar, label: 'Events' },
   { href: '/dashboard/bookings', icon: Bookmark, label: 'Bookings' },
   { href: '/dashboard/clubhouse', icon: KeyRound, label: 'Clubhouse' },
+  { href: '/dashboard/funds', icon: Wallet, label: 'Funds' },
   { href: '/dashboard/issues', icon: AlertCircle, label: 'Issues' },
   { href: '/dashboard/gallery', icon: Images, label: 'Gallery' },
   { href: '/dashboard/broadcasts', icon: Radio, label: 'Broadcasts' },
@@ -27,6 +28,7 @@ const adminItems = [
   { href: '/admin/issues', icon: AlertCircle, label: 'Issues Board' },
   { href: '/admin/clubhouse', icon: KeyRound, label: 'Clubhouse' },
   { href: '/admin/clubhouse/validate', icon: ScanLine, label: 'Validate Pass' },
+  { href: '/admin/funds', icon: Wallet, label: 'Funds' },
   { href: '/admin/messages', icon: Bot, label: 'Bot Messages' },
   { href: '/admin/updates', icon: Newspaper, label: 'Updates' },
   { href: '/admin/gallery', icon: Images, label: 'Gallery' },

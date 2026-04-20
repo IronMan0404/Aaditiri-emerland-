@@ -1,6 +1,6 @@
 import { createServerSupabaseClient } from '@/lib/supabase-server';
 import Link from 'next/link';
-import { Users, Megaphone, Calendar, Bookmark, Images, Radio, Newspaper, Shield, Bot, FileClock } from 'lucide-react';
+import { Users, Megaphone, Calendar, Bookmark, Images, Radio, Newspaper, Shield, Bot, FileClock, Wallet, Award } from 'lucide-react';
 
 async function getStats() {
   const supabase = await createServerSupabaseClient();
@@ -42,6 +42,8 @@ export default async function AdminDashboard() {
     { label: 'Send Broadcast', icon: Radio, href: '/dashboard/broadcasts', desc: 'Community-wide messages' },
     { label: 'Create Event', icon: Calendar, href: '/dashboard/events', desc: 'Schedule community events' },
     { label: 'Audit Log', icon: FileClock, href: '/admin/audit', desc: 'Who changed what & when' },
+    { label: 'Manage Funds', icon: Wallet, href: '/admin/funds', desc: 'Verify contributions, record spends' },
+    { label: 'Association Tags', icon: Award, href: '/admin/tags', desc: 'President, VP, Secretary, Treasurer' },
   ];
 
   return (
