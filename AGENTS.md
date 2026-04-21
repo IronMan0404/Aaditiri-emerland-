@@ -147,3 +147,4 @@ Kill any stray `next dev` in WSL, wipe `.next`, then restart.
 2. Don't leave `console.log` in committed code.
 3. If you touched DB schema, update `supabase/schema.sql` **and** document the migration in the PR.
 4. If you change `proxy.ts` auth rules, manually test `/dashboard`, `/admin`, `/auth/pending`, and `/auth/login` flows.
+
