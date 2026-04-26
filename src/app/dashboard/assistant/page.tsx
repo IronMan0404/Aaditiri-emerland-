@@ -185,10 +185,15 @@ export default function AssistantPage() {
       if (!res.ok || !json.reply) {
         const errorMsg = json.error ?? `Assistant error (${res.status})`;
         const isUnconfigured = res.status === 503;
-        const helper = isUnconfigured
-          ? '\n\nAdmin: set AI_PROVIDER=groq and AI_API_KEY in your env to enable the assistant. Free Groq API keys: https://console.groq.com/keys'
-          : '';
-        toast.error(errorMsg);
+        const isRateLimit = res.status === 429 || /rate limit/i.test(errorMsg);
+        let helper = '';
+        if (isUnconfigured) {
+          helper =
+            '\n\nAdmin: set AI_PROVIDER=groq and AI_API_KEY in your env to enable the assistant. Free Groq API keys: https://console.groq.com/keys';
+        } else if (isRateLimit) {
+          helper = '\n\nTip: shorter prompts and shorter chat history use fewer tokens.';
+        }
+        toast.error(isRateLimit ? 'AI provider is busy — try again in ~30s.' : errorMsg);
         setRows((prev) => [
           ...prev,
           {
