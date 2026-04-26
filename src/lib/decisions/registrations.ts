@@ -64,18 +64,27 @@ async function readRegistration(profileId: string): Promise<RegistrationRow | nu
   return (data ?? null) as RegistrationRow | null;
 }
 
+// "What" line for the Telegram disabled-button footer. Always self-contained
+// so a co-admin scrolling the chat days later can tell, at a glance, who got
+// approved/rejected without re-opening the row in the app.
+function describeSubject(row: RegistrationRow): string {
+  const name = (row.full_name ?? row.email ?? 'resident').trim();
+  return row.flat_number ? `${name} (Flat ${row.flat_number})` : name;
+}
+
 export async function approveRegistration(
   profileId: string,
   actor: DecisionActor,
 ): Promise<DecisionResult> {
   const before = await readRegistration(profileId);
   if (!before) return { ok: false, status: 'failed', label: 'Profile not found' };
+  const subject = describeSubject(before);
   if (before.is_approved) {
     // Already approved — no audit log, no notify.
     return {
       ok: true,
       status: 'noop',
-      label: `Already approved`,
+      label: `${subject} is already approved`,
     };
   }
 
@@ -110,7 +119,7 @@ export async function approveRegistration(
   return {
     ok: true,
     status: 'approved',
-    label: `Approved by ${actor.fullName ?? 'admin'}`,
+    label: `Approved registration of ${subject} — by ${actor.fullName ?? 'admin'}`,
   };
 }
 
@@ -126,13 +135,14 @@ export async function rejectRegistration(
 
   const before = await readRegistration(profileId);
   if (!before) return { ok: false, status: 'failed', label: 'Profile not found' };
+  const subject = describeSubject(before);
   if (before.is_approved) {
     // Reject after approve is unusual; surface it rather than silently
     // demoting an active user.
     return {
       ok: false,
       status: 'failed',
-      label: 'Already approved — cannot reject',
+      label: `${subject} is already approved — cannot reject`,
     };
   }
 
@@ -161,6 +171,6 @@ export async function rejectRegistration(
   return {
     ok: true,
     status: 'rejected',
-    label: `Rejected by ${actor.fullName ?? 'admin'}`,
+    label: `Rejected registration of ${subject} — by ${actor.fullName ?? 'admin'}`,
   };
 }

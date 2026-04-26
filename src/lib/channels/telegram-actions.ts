@@ -352,12 +352,20 @@ export async function handleCallbackQuery(query: TgCallbackQuery): Promise<void>
     return;
   }
 
-  await answerCallback(query.id, result.label);
+  // Telegram's answerCallbackQuery toast is capped to 200 chars; truncate
+  // for the popup but keep the full self-contained label in the message
+  // footer so the chat history shows exactly who decided what.
+  await answerCallback(query.id, truncateForToast(result.label));
   await disableButtons(
     message.chat.id,
     message.message_id,
     `_${escapeMarkdownV2(result.label)}_`,
   );
+}
+
+function truncateForToast(text: string, max = 195): string {
+  if (text.length <= max) return text;
+  return `${text.slice(0, max - 1).trimEnd()}…`;
 }
 
 /**

@@ -86,14 +86,36 @@ export interface ApproveBookingResult extends DecisionResult {
   booking?: BookingRow;
 }
 
+// "What" line for the Telegram disabled-button footer. Embeds the facility +
+// slot + requester so co-admins can read the chat months later and know
+// exactly which booking was decided without re-opening the row.
+function describeBooking(row: BookingRowWithRequester, flatHint?: string | null): string {
+  const slot = `${row.date} ${row.time_slot}`;
+  const who  = row.requester_name ?? row.requester_email ?? 'resident';
+  const where = flatHint ? `Flat ${flatHint}, ${who}` : who;
+  return `${row.facility} · ${slot} (${where})`;
+}
+
+async function readRequesterFlat(userId: string): Promise<string | null> {
+  const admin = createAdminSupabaseClient();
+  const { data } = await admin
+    .from('profiles')
+    .select('flat_number')
+    .eq('id', userId)
+    .maybeSingle();
+  return (data?.flat_number ?? null) as string | null;
+}
+
 export async function approveBooking(
   bookingId: string,
   actor: DecisionActor,
 ): Promise<ApproveBookingResult> {
   const before = await readBooking(bookingId);
   if (!before) return { ok: false, status: 'failed', label: 'Booking not found' };
+  const flat = await readRequesterFlat(before.user_id);
+  const subject = describeBooking(before, flat);
   if (before.status === 'approved') {
-    return { ok: true, status: 'noop', label: 'Already approved', booking: before };
+    return { ok: true, status: 'noop', label: `${subject} is already approved`, booking: before };
   }
   if (before.status !== 'pending') {
     return {
@@ -152,7 +174,7 @@ export async function approveBooking(
   return {
     ok: true,
     status: 'approved',
-    label: `Approved by ${actor.fullName ?? 'admin'}`,
+    label: `Approved booking ${subject} — by ${actor.fullName ?? 'admin'}`,
     booking: after as unknown as BookingRow,
   };
 }
@@ -172,8 +194,10 @@ export async function rejectBooking(
 
   const before = await readBooking(bookingId);
   if (!before) return { ok: false, status: 'failed', label: 'Booking not found' };
+  const flat = await readRequesterFlat(before.user_id);
+  const subject = describeBooking(before, flat);
   if (before.status === 'rejected') {
-    return { ok: true, status: 'noop', label: 'Already rejected' };
+    return { ok: true, status: 'noop', label: `${subject} is already rejected` };
   }
   if (before.status !== 'pending') {
     return {
@@ -233,6 +257,6 @@ export async function rejectBooking(
   return {
     ok: true,
     status: 'rejected',
-    label: `Rejected by ${actor.fullName ?? 'admin'}`,
+    label: `Rejected booking ${subject} — by ${actor.fullName ?? 'admin'}`,
   };
 }

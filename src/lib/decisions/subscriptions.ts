@@ -38,6 +38,16 @@ async function readSubscription(id: string): Promise<SubscriptionRow | null> {
   return (data ?? null) as unknown as SubscriptionRow | null;
 }
 
+// "What" line for Telegram disabled-button footer. Always self-contained so
+// co-admins reading the chat later can see what was decided without opening
+// the row.
+function describeSubscription(row: SubscriptionRow, monthsHint?: number): string {
+  const tier = row.clubhouse_tiers?.name ?? 'Tier';
+  const months = monthsHint ?? row.requested_months;
+  const monthsText = months ? `${months} mo · ` : '';
+  return `${tier} · ${monthsText}Flat ${row.flat_number}`;
+}
+
 export interface ApproveSubscriptionOptions {
   startDate?: string;
   monthsOverride?: number;
@@ -124,7 +134,7 @@ export async function approveSubscription(
   return {
     ok: true,
     status: 'approved',
-    label: `Approved by ${actor.fullName ?? 'admin'}`,
+    label: `Approved subscription ${describeSubscription(sub, months)} — by ${actor.fullName ?? 'admin'}`,
   };
 }
 
@@ -186,6 +196,6 @@ export async function rejectSubscription(
   return {
     ok: true,
     status: 'rejected',
-    label: `Rejected by ${actor.fullName ?? 'admin'}`,
+    label: `Rejected subscription ${describeSubscription(sub)} — by ${actor.fullName ?? 'admin'}`,
   };
 }
