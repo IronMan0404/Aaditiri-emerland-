@@ -24,9 +24,18 @@
 -- callers with role IN ('staff', 'admin') can run it; anon and
 -- residents still get an empty result set + a 403 from the API
 -- on top.
+--
+-- Implementation note: CREATE OR REPLACE FUNCTION cannot change
+-- the OUT parameter shape (Postgres errors with 42P13: "cannot
+-- change return type of existing function"). Since we're adding
+-- a `role` column to the RETURNS TABLE we DROP first. The drop
+-- is idempotent and dropping invalidates any dependent grants,
+-- which we re-establish below.
 -- =========================================================
 
-create or replace function public.staff_visible_residents(
+drop function if exists public.staff_visible_residents(text, int, int);
+
+create function public.staff_visible_residents(
   search_query text default null,
   page_size    int  default 50,
   page_offset  int  default 0

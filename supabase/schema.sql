@@ -2315,8 +2315,16 @@ create policy "Staff manage own attendance"
 -- for the May 2026 update that brought admins into the projection
 -- so staff can escalate. Staff-on-staff visibility is intentionally
 -- excluded — that's a peer-privacy decision we keep conservative.
+--
+-- Note: re-running this file against a DB that already has the
+-- 6-column 20260512 version would fail with 42P13 ("cannot
+-- change return type of existing function") because we add a
+-- `role` column to RETURNS TABLE here. The DROP guards against
+-- that.
 -- ============================================================
-create or replace function public.staff_visible_residents(
+drop function if exists public.staff_visible_residents(text, int, int);
+
+create function public.staff_visible_residents(
   search_query text default null,
   page_size    int  default 50,
   page_offset  int  default 0
