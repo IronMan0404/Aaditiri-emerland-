@@ -29,17 +29,19 @@ function LoginErrorToast() {
 }
 
 /**
- * Decide whether the input the user typed looks like an email or a phone
- * number, so we can pass the right field to Supabase. We pick "phone" for
- * anything that doesn't contain "@" and looks digit-ish; otherwise email.
+ * Lightweight client-side validation: does the input look like an email or
+ * a phone number? We don't try to definitively classify here — the server's
+ * /api/auth/resolve-identifier endpoint is the authoritative source. This
+ * just catches obviously-empty / obviously-malformed input before we even
+ * make a network call.
  */
-function classifyIdentifier(input: string): 'email' | 'phone' | 'invalid' {
+function looksValid(input: string): boolean {
   const trimmed = input.trim();
-  if (!trimmed) return 'invalid';
+  if (!trimmed) return false;
   if (trimmed.includes('@')) {
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed) ? 'email' : 'invalid';
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed);
   }
-  return normalizePhoneE164(trimmed) ? 'phone' : 'invalid';
+  return Boolean(normalizePhoneE164(trimmed));
 }
 
 export default function LoginPage() {
@@ -56,18 +58,42 @@ export default function LoginPage() {
       toast.error('Please fill in all fields');
       return;
     }
-
-    const kind = classifyIdentifier(identifier);
-    if (kind === 'invalid') {
+    if (!looksValid(identifier)) {
       toast.error('Enter a valid email or phone number');
       return;
     }
 
     setLoading(true);
-    const credentials = kind === 'email'
-      ? { email: identifier.trim().toLowerCase(), password }
-      : { phone: normalizePhoneE164(identifier)!, password };
-    const { error } = await supabase.auth.signInWithPassword(credentials);
+
+    // Resolve the identifier server-side. For email it just echoes back; for
+    // a phone number it looks up the matching profiles row and returns the
+    // email on file. We always sign in with email + password so the
+    // Supabase Phone provider does NOT need to be enabled.
+    let resolvedEmail: string;
+    try {
+      const res = await fetch('/api/auth/resolve-identifier', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier }),
+      });
+      const data: { email?: string; error?: string } = await res.json().catch(() => ({}));
+      if (!res.ok || !data.email) {
+        // Generic message so we don't leak whether the identifier exists.
+        toast.error(data.error || 'Invalid login credentials');
+        setLoading(false);
+        return;
+      }
+      resolvedEmail = data.email;
+    } catch {
+      toast.error('Network error. Please try again.');
+      setLoading(false);
+      return;
+    }
+
+    const { error } = await supabase.auth.signInWithPassword({
+      email: resolvedEmail,
+      password,
+    });
     setLoading(false);
 
     if (error) {

@@ -175,14 +175,22 @@ export async function POST(req: Request) {
     }
   }
 
-  // Build the createUser payload. Both identifiers can be present at
-  // once — Supabase happily indexes both and signInWithPassword works
-  // with either.
+  // Build the createUser payload.
   //
-  // For phone-only signups (no email), Supabase's createUser STILL
-  // requires email_confirm to be implicitly satisfied; passing only
-  // `phone` + `phone_confirm: true` is the documented way.
+  // IMPORTANT: We deliberately do NOT pass `phone` to admin.createUser, even
+  // when the resident provided one. Supabase's `phone` field on `auth.users`
+  // requires the Phone provider to be enabled (which in turn requires Twilio
+  // / MessageBird credentials), and we don't want that dependency. The phone
+  // is stored on `public.profiles.phone` instead, and login uses
+  // /api/auth/resolve-identifier to translate phone → email before calling
+  // signInWithPassword.
+  //
+  // Phone-only signups still need a valid email on `auth.users` to create
+  // the user, so we synthesize a placeholder email below.
+  const authEmail = email || `phone+${Date.now()}-${Math.random().toString(36).slice(2, 10)}@aaditri.invalid`;
   const createPayload: Parameters<typeof admin.auth.admin.createUser>[0] = {
+    email: authEmail,
+    email_confirm: true,
     password,
     user_metadata: {
       full_name: fullName,
@@ -190,14 +198,6 @@ export async function POST(req: Request) {
       resident_type: residentType,
     },
   };
-  if (email) {
-    createPayload.email = email;
-    createPayload.email_confirm = true;
-  }
-  if (phone) {
-    createPayload.phone = phone.replace(/^\+/, ''); // Supabase wants digits, no +
-    createPayload.phone_confirm = true;
-  }
 
   const { data: created, error: createErr } = await admin.auth.admin.createUser(createPayload);
 
@@ -212,14 +212,14 @@ export async function POST(req: Request) {
   // STEP 2: persist the profile + optional collections.
   const warnings: string[] = [];
 
-  // profiles.email is NOT NULL in our schema. Phone-only signups get a
-  // synthetic placeholder so the row is still valid; the resident can
-  // update it from /dashboard/profile after admin approval.
-  const profileEmail = email || `phone+${userId}@aaditri.invalid`;
-
+  // The profile row MUST hold the SAME email as auth.users for the
+  // /api/auth/resolve-identifier path to work correctly — the resolver looks
+  // up `profiles.phone` and returns the matching `profiles.email`, which the
+  // client then passes to signInWithPassword. If the two emails diverge,
+  // sign-in fails with "invalid credentials" even though the password is right.
   const { error: profileErr } = await admin.from('profiles').upsert({
     id: userId,
-    email: profileEmail,
+    email: authEmail,
     full_name: fullName,
     phone: phone || null,
     flat_number: flatNumber,
