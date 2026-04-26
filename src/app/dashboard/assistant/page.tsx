@@ -14,6 +14,9 @@ import {
   PhoneCall,
   CalendarDays,
   Lightbulb,
+  Check,
+  X,
+  Loader2,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '@/hooks/useAuth';
@@ -23,10 +26,24 @@ import { Textarea } from '@/components/ui/Input';
 type AssistantMode = 'general' | 'booking' | 'report';
 type ChatRole = 'user' | 'assistant';
 
+type PendingActionKind = 'create_booking' | 'create_issue';
+
+interface PendingAction {
+  token: string;
+  kind: PendingActionKind;
+  summary: string;
+  // Args are kind-specific. We render them generically as a key/value list.
+  args: Record<string, unknown>;
+  status: 'pending' | 'submitting' | 'confirmed' | 'cancelled' | 'failed';
+  resultMessage?: string;
+}
+
 interface ChatRow {
   id: string;
   role: ChatRole;
   content: string;
+  /** Pending actions drafted by the AI on this assistant turn, if any. */
+  pendingActions?: PendingAction[];
 }
 
 interface AssistantResponse {
@@ -35,6 +52,12 @@ interface AssistantResponse {
   error?: string;
   model?: string;
   provider?: string;
+  pending_actions?: Array<{
+    token: string;
+    kind: PendingActionKind;
+    summary: string;
+    args: Record<string, unknown>;
+  }>;
 }
 
 type PromptIcon = ComponentType<{ size?: number; className?: string }>;
@@ -124,7 +147,7 @@ export default function AssistantPage() {
       id: 'welcome',
       role: 'assistant',
       content:
-        'Hi! I am your Aaditri Community Assistant. Tap a quick prompt below or type your own question.',
+        'Hi! I am your Aaditri Community Assistant. I can answer questions, draft a clubhouse booking, or raise an issue for you — you will always tap Confirm before anything is submitted. Try a quick prompt below or type your own.',
     },
   ]);
 
@@ -179,9 +202,21 @@ export default function AssistantPage() {
 
       setProvider(json.provider ?? null);
       setModel(json.model ?? null);
+      const pendingActions: PendingAction[] | undefined = json.pending_actions?.map((p) => ({
+        token: p.token,
+        kind: p.kind,
+        summary: p.summary,
+        args: p.args,
+        status: 'pending' as const,
+      }));
       setRows((prev) => [
         ...prev,
-        { id: nextId('a'), role: 'assistant', content: json.reply ?? '' },
+        {
+          id: nextId('a'),
+          role: 'assistant',
+          content: json.reply ?? '',
+          pendingActions,
+        },
       ]);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Network error';
@@ -203,6 +238,64 @@ export default function AssistantPage() {
     if (!provider || !model) return 'Powered by hosted AI · graceful fallback when not configured';
     return `${provider} · ${model}`;
   }, [provider, model]);
+
+  // Update one pending action inside one chat row by token. We keep the
+  // state inline-on-the-row (rather than a flat global list) so the visual
+  // position of the confirmation card stays anchored to the assistant turn
+  // that produced it.
+  function updateAction(rowId: string, token: string, patch: Partial<PendingAction>) {
+    setRows((prev) =>
+      prev.map((r) =>
+        r.id !== rowId
+          ? r
+          : {
+              ...r,
+              pendingActions: r.pendingActions?.map((a) =>
+                a.token === token ? { ...a, ...patch } : a,
+              ),
+            },
+      ),
+    );
+  }
+
+  async function confirmAction(rowId: string, action: PendingAction) {
+    if (action.status !== 'pending') return;
+    updateAction(rowId, action.token, { status: 'submitting' });
+    try {
+      const res = await fetch('/api/ai/confirm', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ token: action.token }),
+      });
+      const json = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        message?: string;
+        error?: string;
+        kind?: string;
+        id?: string;
+      };
+      if (!res.ok || !json.ok) {
+        const msg = json.error ?? `Failed (${res.status})`;
+        toast.error(msg);
+        updateAction(rowId, action.token, { status: 'failed', resultMessage: msg });
+        return;
+      }
+      toast.success(json.message ?? 'Submitted');
+      updateAction(rowId, action.token, {
+        status: 'confirmed',
+        resultMessage: json.message ?? 'Submitted',
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Network error';
+      toast.error(msg);
+      updateAction(rowId, action.token, { status: 'failed', resultMessage: msg });
+    }
+  }
+
+  function cancelAction(rowId: string, action: PendingAction) {
+    if (action.status !== 'pending') return;
+    updateAction(rowId, action.token, { status: 'cancelled' });
+  }
 
   // The page is laid out as a single-screen chat experience: a tight header,
   // a horizontally-scrolling quick-prompt strip, and a chat area that fills
@@ -269,22 +362,32 @@ export default function AssistantPage() {
       <div className="bg-white rounded-2xl shadow-sm border border-gray-200 flex-1 min-h-0 flex flex-col overflow-hidden">
         <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
           {rows.map((row) => (
-            <div key={row.id} className={`flex ${row.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              <div
-                className={`max-w-[88%] rounded-2xl px-3 py-2 whitespace-pre-wrap break-words text-sm ${
-                  row.role === 'user'
-                    ? 'bg-[#1B5E20] text-white'
-                    : 'bg-gray-100 text-gray-800 border border-gray-200'
-                }`}
-              >
-                {row.role === 'assistant' && (
-                  <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-gray-500 mb-1">
-                    <Bot size={12} />
-                    Assistant
-                  </span>
-                )}
-                <div>{row.content}</div>
+            <div key={row.id} className="space-y-2">
+              <div className={`flex ${row.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                <div
+                  className={`max-w-[88%] rounded-2xl px-3 py-2 whitespace-pre-wrap break-words text-sm ${
+                    row.role === 'user'
+                      ? 'bg-[#1B5E20] text-white'
+                      : 'bg-gray-100 text-gray-800 border border-gray-200'
+                  }`}
+                >
+                  {row.role === 'assistant' && (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-gray-500 mb-1">
+                      <Bot size={12} />
+                      Assistant
+                    </span>
+                  )}
+                  <div>{row.content}</div>
+                </div>
               </div>
+              {row.pendingActions?.map((action) => (
+                <PendingActionCard
+                  key={action.token}
+                  action={action}
+                  onConfirm={() => void confirmAction(row.id, action)}
+                  onCancel={() => cancelAction(row.id, action)}
+                />
+              ))}
             </div>
           ))}
           {sending && (
@@ -321,6 +424,108 @@ export default function AssistantPage() {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// Inline confirmation card. The AI never submits writes by itself — it
+// drafts an action and we render this card so the human reviewer can either
+// Confirm (which calls /api/ai/confirm with the signed token) or Cancel
+// (which just dismisses it locally). After a terminal status the buttons
+// collapse into a single status pill so the chat stays compact.
+function PendingActionCard({
+  action,
+  onConfirm,
+  onCancel,
+}: {
+  action: PendingAction;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const titleByKind: Record<PendingActionKind, { label: string; icon: ComponentType<{ size?: number; className?: string }> }> = {
+    create_booking: { label: 'New booking request', icon: CalendarClock },
+    create_issue: { label: 'New issue report', icon: Wrench },
+  };
+  const { label, icon: Icon } = titleByKind[action.kind];
+
+  const argRows: Array<[string, string]> = Object.entries(action.args)
+    .filter(([, v]) => v !== null && v !== undefined && v !== '')
+    .map(([k, v]) => [k, String(v)]);
+
+  const isTerminal = action.status !== 'pending' && action.status !== 'submitting';
+
+  return (
+    <div className="max-w-[88%] rounded-2xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+      <div className="px-3 py-2 bg-amber-50 border-b border-amber-100 flex items-center gap-2">
+        <Icon size={14} className="text-amber-700" />
+        <span className="text-[11px] font-bold uppercase tracking-wider text-amber-800">
+          {label} · awaiting your confirmation
+        </span>
+      </div>
+      <div className="px-3 py-2 space-y-1.5">
+        <div className="text-sm text-gray-800 break-words">{action.summary}</div>
+        {argRows.length > 0 && (
+          <dl className="text-[11px] text-gray-500 grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+            {argRows.map(([k, v]) => (
+              <div key={k} className="contents">
+                <dt className="font-semibold uppercase tracking-wider">{k}</dt>
+                <dd className="break-words">{v}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
+      </div>
+      <div className="px-3 py-2 border-t border-gray-100 flex items-center gap-2">
+        {action.status === 'pending' && (
+          <>
+            <button
+              type="button"
+              onClick={onConfirm}
+              className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#1B5E20] text-white text-xs font-semibold hover:bg-[#154A19] transition"
+            >
+              <Check size={13} />
+              Confirm & Submit
+            </button>
+            <button
+              type="button"
+              onClick={onCancel}
+              className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 bg-white text-xs font-semibold text-gray-600 hover:bg-gray-50 transition"
+            >
+              <X size={13} />
+              Cancel
+            </button>
+          </>
+        )}
+        {action.status === 'submitting' && (
+          <div className="flex items-center gap-1.5 text-xs text-gray-500">
+            <Loader2 size={13} className="animate-spin" />
+            Submitting…
+          </div>
+        )}
+        {action.status === 'confirmed' && (
+          <div className="flex items-center gap-1.5 text-xs font-semibold text-[#1B5E20]">
+            <Check size={13} />
+            {action.resultMessage ?? 'Submitted'}
+          </div>
+        )}
+        {action.status === 'cancelled' && (
+          <div className="flex items-center gap-1.5 text-xs text-gray-500">
+            <X size={13} />
+            Cancelled
+          </div>
+        )}
+        {action.status === 'failed' && (
+          <div className="flex items-center gap-1.5 text-xs text-red-600">
+            <X size={13} />
+            {action.resultMessage ?? 'Failed'}
+          </div>
+        )}
+      </div>
+      {isTerminal && action.status !== 'confirmed' && action.status !== 'cancelled' && (
+        <div className="px-3 pb-2 text-[11px] text-gray-500">
+          Ask the assistant again to retry.
+        </div>
+      )}
     </div>
   );
 }

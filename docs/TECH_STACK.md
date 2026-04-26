@@ -70,7 +70,7 @@ Folder organization:
 | `src/app/api/news/*` | Server-side news/data aggregators (weather, AQI, fuel, markets, panchang, RSS feeds, geocode). All unauthenticated, all rate-limited via Next's `revalidate`. |
 | `src/app/api/push/*` | Web push subscribe/unsubscribe and broadcast fan-out. |
 | `src/app/api/telegram/*` | Telegram webhook + pairing flow. |
-| `src/app/api/ai/*` | AI assistant — provider-agnostic adapter (currently Groq). |
+| `src/app/api/ai/*` | AI assistant — provider-agnostic adapter (currently Groq). Tool-calling is on for Groq/OpenAI: read tools execute server-side immediately, write tools (`create_booking`, `create_issue`) mint a signed pending-action token that the user must Confirm. No update/delete tools. |
 
 ### 2. `src/proxy.ts` — auth + role gating
 
@@ -234,6 +234,7 @@ Vercel Hobby plans cap cron at one daily run, hence the consolidated handler. If
 | `AI_PROVIDER` | `groq` (recommended), `gemini`, `openai`, or `none` | — |
 | `AI_API_KEY` | Provider key | https://console.groq.com/keys |
 | `AI_MODEL` | Override model (optional) | Provider docs |
+| `AI_TOOLS_SECRET` | HMAC secret for AI pending-action tokens (falls back to `CLUBHOUSE_PASS_SECRET`) | `openssl rand -base64 32` |
 
 ---
 
