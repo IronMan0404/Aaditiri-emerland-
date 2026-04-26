@@ -139,6 +139,19 @@ export type NotificationPayloads = {
     surplusPaise: number;
     closureNotes: string;
   };
+  // Admin-triggered dues nudge. One row per (flat, dispatch). The
+  // dedup key (refId) is a unique batch id so the same flat can be
+  // nudged again next month without the dedup ledger blocking it.
+  // `recipientId` lets the audience resolver target exactly that
+  // resident — the dispatcher fires once per resident-in-flat.
+  dues_reminder: {
+    recipientId: string;
+    flatNumber: string;
+    totalPendingPaise: number;
+    fundCount: number;
+    fundName: string | null;
+    fundId: string | null;
+  };
 };
 
 export type NotificationKind = keyof NotificationPayloads;
@@ -671,6 +684,42 @@ export const ROUTING: RoutingTable = {
             .filter(Boolean)
             .join('\n'),
           buttons: [{ text: 'View fund', url: `/dashboard/funds/${fundId}` }],
+        },
+      };
+    },
+  },
+
+  // Per-resident dues nudge fired by an admin from the dues page or
+  // a single fund's detail page. Audience is exactly the recipient
+  // identified in the payload (the API route fans out one notify()
+  // call per resident in each flat that owes money).
+  dues_reminder: {
+    audience: async ({ recipientId }) => [recipientId],
+    render: ({ flatNumber, totalPendingPaise, fundCount, fundName, fundId }) => {
+      const amount = `\u20B9${Math.round(totalPendingPaise / 100).toLocaleString('en-IN')}`;
+      const fundClause = fundName
+        ? `for *${fundName}*`
+        : fundCount === 1
+          ? 'across *1 fund*'
+          : `across *${fundCount} funds*`;
+      const link = fundId ? `/dashboard/funds/${fundId}` : '/dashboard/funds';
+      return {
+        push: {
+          title: `Pending dues: ${amount}`,
+          body: fundName
+            ? `Flat ${flatNumber} has ${amount} outstanding for ${fundName}.`
+            : `Flat ${flatNumber} has ${amount} outstanding ${fundCount === 1 ? 'on 1 fund' : `across ${fundCount} funds`}.`,
+          url: link,
+          tag: `dues:${flatNumber}`,
+        },
+        telegram: {
+          text: [
+            '*Pending dues reminder*',
+            `Flat *${md(flatNumber)}* has *${md(amount)}* outstanding ${md(fundClause.replace(/\*/g, ''))}\\.`,
+            '',
+            '_Tap below to view and contribute\\._',
+          ].join('\n'),
+          buttons: [{ text: 'Pay / view in app', url: link }],
         },
       };
     },

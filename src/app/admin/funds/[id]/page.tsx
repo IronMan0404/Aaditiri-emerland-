@@ -3,7 +3,7 @@ import { use as usePromise } from 'react';
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { ArrowLeft, Plus, CheckCircle2, XCircle, Receipt, Lock, Trash2, Edit3, Ban, Upload, Wallet, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, Plus, CheckCircle2, XCircle, Receipt, Lock, Trash2, Edit3, Ban, Upload, Wallet, AlertTriangle, Bell, Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '@/hooks/useAuth';
 import Modal from '@/components/ui/Modal';
@@ -45,6 +45,69 @@ export default function AdminFundDetail({ params }: { params: Promise<{ id: stri
     contributions: number; spends: number; refunds: number;
     comments: number; attachments: number; child_funds: number;
   }>(null);
+
+  // Per-fund "Send dues alert" — see /api/admin/funds/dues/alert.
+  // Same two-step preview-then-confirm flow as the global alert on
+  // /admin/funds/dues, scoped to this single fund.
+  const [alertOpen, setAlertOpen] = useState(false);
+  const [alertPreview, setAlertPreview] = useState<{
+    flats_with_dues: number;
+    recipients_count: number;
+    total_pending_paise: number;
+  } | null>(null);
+  const [alertLoading, setAlertLoading] = useState(false);
+  const [alertSending, setAlertSending] = useState(false);
+
+  async function openAlertModal() {
+    setAlertOpen(true);
+    setAlertLoading(true);
+    setAlertPreview(null);
+    try {
+      const r = await fetch('/api/admin/funds/dues/alert', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 'fund', fundId: id, preview: true }),
+      });
+      const j = await r.json();
+      if (!r.ok) {
+        toast.error(j.error ?? 'Could not preview dues alert');
+        setAlertOpen(false);
+        return;
+      }
+      setAlertPreview({
+        flats_with_dues: j.flats_with_dues,
+        recipients_count: j.recipients_count,
+        total_pending_paise: j.total_pending_paise,
+      });
+    } catch (e) {
+      toast.error((e as Error).message);
+      setAlertOpen(false);
+    } finally {
+      setAlertLoading(false);
+    }
+  }
+
+  async function sendAlert() {
+    setAlertSending(true);
+    try {
+      const r = await fetch('/api/admin/funds/dues/alert', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 'fund', fundId: id }),
+      });
+      const j = await r.json();
+      if (!r.ok) {
+        toast.error(j.error ?? 'Failed to send dues alert');
+        return;
+      }
+      toast.success(
+        `Dues alert queued for ${j.recipients_count} resident${j.recipients_count === 1 ? '' : 's'} across ${j.flats_with_dues} flat${j.flats_with_dues === 1 ? '' : 's'}.`,
+      );
+      setAlertOpen(false);
+    } finally {
+      setAlertSending(false);
+    }
+  }
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -256,6 +319,11 @@ export default function AdminFundDetail({ params }: { params: Promise<{ id: stri
         <Button onClick={() => setShowSpend(true)} size="sm" variant="outline">
           <Receipt size={14} /> Record spend
         </Button>
+        {fund.status === 'collecting' && fund.suggested_per_flat && fund.suggested_per_flat > 0 ? (
+          <Button onClick={openAlertModal} size="sm" variant="outline" className="!border-amber-300 !text-amber-700 hover:!bg-amber-50">
+            <Bell size={14} /> Dues alert
+          </Button>
+        ) : null}
         {fund.status !== 'closed' && fund.status !== 'cancelled' && (
           <Button onClick={() => setShowClose(true)} size="sm" variant="secondary">
             <Lock size={14} /> Close fund
@@ -444,6 +512,55 @@ export default function AdminFundDetail({ params }: { params: Promise<{ id: stri
           setForceDeleteCounts(null);
         }}
       />
+
+      {/* Per-fund dues alert confirm modal */}
+      <Modal
+        open={alertOpen}
+        onClose={() => !alertSending && setAlertOpen(false)}
+        title={`Send dues alert for "${fund.name}"?`}
+      >
+        {alertLoading ? (
+          <div className="py-6 flex items-center justify-center gap-2 text-gray-500 text-sm">
+            <Loader2 className="animate-spin" size={16} /> Counting recipients…
+          </div>
+        ) : alertPreview ? (
+          <div className="space-y-3">
+            {alertPreview.recipients_count === 0 ? (
+              <>
+                <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-xs text-emerald-800">
+                  Every flat has paid this fund in full. Nothing to send.
+                </div>
+                <Button type="button" variant="secondary" onClick={() => setAlertOpen(false)} className="w-full">
+                  Close
+                </Button>
+              </>
+            ) : (
+              <>
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-900 space-y-1.5">
+                  <p>
+                    This will DM <strong>{alertPreview.recipients_count} resident{alertPreview.recipients_count === 1 ? '' : 's'}</strong> across{' '}
+                    <strong>{alertPreview.flats_with_dues} flat{alertPreview.flats_with_dues === 1 ? '' : 's'}</strong> short on this fund.
+                  </p>
+                  <p>
+                    Total outstanding: <strong>{formatINR(alertPreview.total_pending_paise)}</strong>.
+                  </p>
+                  <p className="text-amber-700">
+                    Each resident sees their own flat&apos;s amount and a link to the fund.
+                  </p>
+                </div>
+                <div className="flex gap-3 pt-1">
+                  <Button type="button" variant="secondary" onClick={() => setAlertOpen(false)} className="flex-1" disabled={alertSending}>
+                    Cancel
+                  </Button>
+                  <Button type="button" variant="primary" onClick={sendAlert} loading={alertSending} className="flex-1">
+                    Send alert
+                  </Button>
+                </div>
+              </>
+            )}
+          </div>
+        ) : null}
+      </Modal>
     </div>
   );
 }

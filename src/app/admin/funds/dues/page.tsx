@@ -1,9 +1,12 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, AlertCircle, Search, Users, Loader2, AlertTriangle, ChevronDown, ChevronRight, Plus } from 'lucide-react';
+import { ArrowLeft, AlertCircle, Search, Users, Loader2, AlertTriangle, ChevronDown, ChevronRight, Plus, Bell } from 'lucide-react';
+import toast from 'react-hot-toast';
 import { useAuth } from '@/hooks/useAuth';
 import { formatINR, formatINRCompact } from '@/lib/money';
+import Modal from '@/components/ui/Modal';
+import Button from '@/components/ui/Button';
 
 interface FundLite {
   id: string; name: string; suggested_per_flat: number; category: string | null; icon: string | null; color: string | null;
@@ -75,6 +78,69 @@ export default function AdminDuesPage() {
     });
   }, [flats, filter, search]);
 
+  // ─── Send-alert flow ──────────────────────────────────────────────
+  // Two-step: Open modal → fetch preview (recipient count + total) →
+  // admin confirms → POST without preview flag → fan-out runs.
+  const [alertOpen, setAlertOpen] = useState(false);
+  const [alertPreview, setAlertPreview] = useState<{
+    flats_with_dues: number;
+    recipients_count: number;
+    total_pending_paise: number;
+  } | null>(null);
+  const [alertLoading, setAlertLoading] = useState(false);
+  const [alertSending, setAlertSending] = useState(false);
+
+  async function openAlertModal() {
+    setAlertOpen(true);
+    setAlertLoading(true);
+    setAlertPreview(null);
+    try {
+      const r = await fetch('/api/admin/funds/dues/alert', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 'global', preview: true }),
+      });
+      const j = await r.json();
+      if (!r.ok) {
+        toast.error(j.error ?? 'Could not preview dues alert');
+        setAlertOpen(false);
+        return;
+      }
+      setAlertPreview({
+        flats_with_dues: j.flats_with_dues,
+        recipients_count: j.recipients_count,
+        total_pending_paise: j.total_pending_paise,
+      });
+    } catch (e) {
+      toast.error((e as Error).message);
+      setAlertOpen(false);
+    } finally {
+      setAlertLoading(false);
+    }
+  }
+
+  async function sendAlert() {
+    setAlertSending(true);
+    try {
+      const r = await fetch('/api/admin/funds/dues/alert', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 'global' }),
+      });
+      const j = await r.json();
+      if (!r.ok) {
+        toast.error(j.error ?? 'Failed to send dues alert');
+        return;
+      }
+      toast.success(
+        `Dues alert queued for ${j.recipients_count} resident${j.recipients_count === 1 ? '' : 's'} across ${j.flats_with_dues} flat${j.flats_with_dues === 1 ? '' : 's'}.`,
+      );
+      setAlertOpen(false);
+    } finally {
+      setAlertSending(false);
+    }
+  }
+
   function toggle(flat: string) {
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -93,13 +159,24 @@ export default function AdminDuesPage() {
         <ArrowLeft size={16} /> Back to manage funds
       </Link>
 
-      <header className="mb-5">
-        <h1 className="text-2xl md:text-3xl font-bold text-gray-900 flex items-center gap-2">
-          <AlertCircle className="text-amber-700" /> Pending dues per flat
-        </h1>
-        <p className="text-sm text-gray-500 mt-1">
-          Across every active collecting fund with a per-flat suggestion. Dues = suggested − verified paid.
-        </p>
+      <header className="mb-5 flex items-start gap-3">
+        <div className="flex-1 min-w-0">
+          <h1 className="text-2xl md:text-3xl font-bold text-gray-900 flex items-center gap-2">
+            <AlertCircle className="text-amber-700" /> Pending dues per flat
+          </h1>
+          <p className="text-sm text-gray-500 mt-1">
+            Across every active collecting fund with a per-flat suggestion. Dues = suggested − verified paid.
+          </p>
+        </div>
+        {summary && summary.flats_with_dues > 0 ? (
+          <button
+            onClick={openAlertModal}
+            className="shrink-0 inline-flex items-center gap-1.5 px-3 py-2 bg-amber-600 text-white text-xs font-semibold rounded-xl hover:bg-amber-700 transition-colors"
+            title="Send a Telegram + push reminder to every flat with outstanding dues"
+          >
+            <Bell size={14} /> Send dues alert
+          </button>
+        ) : null}
       </header>
 
       {loading ? (
@@ -257,6 +334,51 @@ export default function AdminDuesPage() {
           </div>
         </>
       ) : null}
+
+      {/* Dues alert confirm modal */}
+      <Modal open={alertOpen} onClose={() => !alertSending && setAlertOpen(false)} title="Send pending-dues alert?">
+        {alertLoading ? (
+          <div className="py-6 flex items-center justify-center gap-2 text-gray-500 text-sm">
+            <Loader2 className="animate-spin" size={16} /> Counting recipients…
+          </div>
+        ) : alertPreview ? (
+          <div className="space-y-3">
+            {alertPreview.recipients_count === 0 ? (
+              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-xs text-emerald-800">
+                No flats currently owe money. Nothing to send.
+              </div>
+            ) : (
+              <>
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-900 space-y-1.5">
+                  <p>
+                    This will DM <strong>{alertPreview.recipients_count} resident{alertPreview.recipients_count === 1 ? '' : 's'}</strong> across{' '}
+                    <strong>{alertPreview.flats_with_dues} flat{alertPreview.flats_with_dues === 1 ? '' : 's'}</strong> via Telegram (where linked) and push (where subscribed).
+                  </p>
+                  <p>
+                    Total outstanding: <strong>{formatINR(alertPreview.total_pending_paise)}</strong>.
+                  </p>
+                  <p className="text-amber-700">
+                    Each resident sees only their own flat&apos;s amount. Residents who have already paid in full are skipped.
+                  </p>
+                </div>
+                <div className="flex gap-3 pt-1">
+                  <Button type="button" variant="secondary" onClick={() => setAlertOpen(false)} className="flex-1" disabled={alertSending}>
+                    Cancel
+                  </Button>
+                  <Button type="button" variant="primary" onClick={sendAlert} loading={alertSending} className="flex-1">
+                    Send alert
+                  </Button>
+                </div>
+              </>
+            )}
+            {alertPreview.recipients_count === 0 ? (
+              <Button type="button" variant="secondary" onClick={() => setAlertOpen(false)} className="w-full">
+                Close
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+      </Modal>
     </div>
   );
 }
