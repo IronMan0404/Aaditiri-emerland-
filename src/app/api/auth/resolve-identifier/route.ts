@@ -118,7 +118,10 @@ export async function POST(req: Request) {
   }
 
   const admin = createAdminSupabaseClient();
-  const { data: profile, error } = await admin
+
+  // Primary lookup: canonical E.164 form (the one the client will normalize
+  // to and the one we now write at registration / profile-edit time).
+  let { data: profile, error } = await admin
     .from('profiles')
     .select('email, phone')
     .eq('phone', classified.phone)
@@ -129,6 +132,31 @@ export async function POST(req: Request) {
       { error: 'Lookup failed. Please try again.' },
       { status: 500 },
     );
+  }
+
+  // Fallback for legacy rows that were stored before phone-as-username
+  // was a thing — those rows hold whatever the resident typed (commonly
+  // "9876543210" or "+91 98765 43210"). We re-run the lookup against
+  // candidate variants of the SAME canonical number so login works for
+  // them WITHOUT a backfill. Idempotent + safe: every variant we try
+  // still represents the same real human.
+  if (!profile?.email) {
+    const variants = legacyPhoneVariants(classified.phone);
+    if (variants.length > 0) {
+      const { data: legacy, error: legacyErr } = await admin
+        .from('profiles')
+        .select('email, phone')
+        .in('phone', variants)
+        .limit(1)
+        .maybeSingle();
+      if (legacyErr) {
+        return NextResponse.json(
+          { error: 'Lookup failed. Please try again.' },
+          { status: 500 },
+        );
+      }
+      profile = legacy;
+    }
   }
 
   if (!profile?.email) {
@@ -147,4 +175,18 @@ export async function POST(req: Request) {
   // signInWithPassword purposes. The placeholder is internal-only and never
   // shown to the user. We return it here so the client can sign in.
   return NextResponse.json({ ok: true, email: profile.email, kind: 'phone' });
+}
+
+// Build alternate stored shapes a legacy row might hold for the SAME E.164
+// number. Kept narrow on purpose — anything more elaborate would risk
+// matching a different person's number through coincidence.
+function legacyPhoneVariants(e164: string): string[] {
+  const out = new Set<string>();
+  // Bare digits (no '+'): "+919876543210" -> "919876543210"
+  if (e164.startsWith('+')) out.add(e164.slice(1));
+  // Indian-only convenience: drop the +91 country code -> "9876543210"
+  if (e164.startsWith('+91') && e164.length === 13) out.add(e164.slice(3));
+  // Indian-only with leading 0 instead of +91 -> "09876543210"
+  if (e164.startsWith('+91') && e164.length === 13) out.add(`0${e164.slice(3)}`);
+  return Array.from(out);
 }

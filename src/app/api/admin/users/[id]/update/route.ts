@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
 import { logAdminAction } from '@/lib/admin-audit';
+import { normalizePhoneE164 } from '@/lib/phone';
 
 // Admin-only: modify a user profile. Replaces direct
 // `supabase.from('profiles').update` calls in the admin UI so every
@@ -77,6 +78,26 @@ export async function POST(
       return NextResponse.json({ error: 'full_name must be 1-200 chars' }, { status: 400 });
     }
     patch.full_name = n;
+  }
+
+  // Normalize phone to E.164 so the phone-as-username lookup at
+  // /api/auth/resolve-identifier works for residents whose phone admins
+  // edit here. Empty string => clear it (NULL); a non-empty unparseable
+  // value is rejected rather than silently mangled.
+  if (patch.phone !== undefined) {
+    const raw = patch.phone === null ? '' : String(patch.phone).trim();
+    if (!raw) {
+      patch.phone = null;
+    } else {
+      const normalized = normalizePhoneE164(raw);
+      if (!normalized) {
+        return NextResponse.json(
+          { error: 'phone format not recognised. Use +91 followed by 10 digits or leave blank.' },
+          { status: 400 },
+        );
+      }
+      patch.phone = normalized;
+    }
   }
 
   // Self-demotion guard - prevent the only admin from accidentally

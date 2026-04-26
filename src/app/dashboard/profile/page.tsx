@@ -13,6 +13,7 @@ import FamilyEditor, { type FamilyMemberDraft } from '@/components/ui/FamilyEdit
 import PetsEditor, { type PetDraft } from '@/components/ui/PetsEditor';
 import TelegramConnect from '@/components/notifications/TelegramConnect';
 import { safeImageUrl } from '@/lib/safe-url';
+import { normalizePhoneE164 } from '@/lib/phone';
 
 export default function ProfilePage() {
   const { profile, isAdmin, refetchProfile } = useAuth();
@@ -58,10 +59,43 @@ export default function ProfilePage() {
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
     if (!form.full_name) { toast.error('Name is required'); return; }
+
+    // Normalize phone to E.164 before storing. Without this, the phone-login
+    // resolver (/api/auth/resolve-identifier) can't find the row — it always
+    // looks up by E.164 ("+919876543210") while the form would otherwise
+    // store whatever the user typed ("9876543210", "098765 43210", etc.).
+    const rawPhone = (form.phone || '').trim();
+    let phoneToSave: string | null = null;
+    if (rawPhone) {
+      const normalized = normalizePhoneE164(rawPhone);
+      if (!normalized) {
+        toast.error('Phone number format not recognised — try +91 followed by 10 digits, or leave blank.');
+        return;
+      }
+      phoneToSave = normalized;
+    }
+
     setSaving(true);
-    const { error } = await supabase.from('profiles').update({ full_name: form.full_name, phone: form.phone, flat_number: form.flat_number }).eq('id', profile?.id);
+    const { error } = await supabase
+      .from('profiles')
+      .update({
+        full_name: form.full_name,
+        phone: phoneToSave,
+        flat_number: form.flat_number,
+      })
+      .eq('id', profile?.id);
     setSaving(false);
-    if (error) { toast.error(error.message); return; }
+    if (error) {
+      // Most common failure here is the new profiles_phone_unique_idx
+      // tripping when two residents share a phone (e.g. spouse). Surface
+      // it cleanly so the user knows what to do.
+      if (/duplicate key|unique constraint|profiles_phone_unique_idx/i.test(error.message)) {
+        toast.error('That phone number is already linked to another account.');
+      } else {
+        toast.error(error.message);
+      }
+      return;
+    }
     toast.success('Profile updated!');
     refetchProfile?.();
     setEditOpen(false);

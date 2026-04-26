@@ -34,14 +34,33 @@ function LoginErrorToast() {
  * /api/auth/resolve-identifier endpoint is the authoritative source. This
  * just catches obviously-empty / obviously-malformed input before we even
  * make a network call.
+ *
+ * Returns a friendly hint when invalid so the user knows WHY it was rejected
+ * — the previous generic "Enter a valid email or phone number" toast was
+ * unhelpful for someone typing a 9-digit number or forgetting the country
+ * code.
  */
-function looksValid(input: string): boolean {
+function classifyInput(input: string): { ok: true } | { ok: false; reason: string } {
   const trimmed = input.trim();
-  if (!trimmed) return false;
+  if (!trimmed) return { ok: false, reason: 'Enter your email or phone number' };
   if (trimmed.includes('@')) {
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed);
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) return { ok: true };
+    return { ok: false, reason: 'That email address looks incomplete' };
   }
-  return Boolean(normalizePhoneE164(trimmed));
+  if (normalizePhoneE164(trimmed)) return { ok: true };
+  // Phone-shaped but not parseable. Try to give a helpful hint.
+  const digits = trimmed.replace(/[^0-9+]/g, '');
+  const digitCount = digits.replace('+', '').length;
+  if (digitCount === 0) {
+    return { ok: false, reason: 'Enter a valid email or phone number' };
+  }
+  if (digitCount < 10) {
+    return { ok: false, reason: `Phone number is too short (${digitCount} digits) — Indian numbers need 10 digits` };
+  }
+  if (digitCount > 15) {
+    return { ok: false, reason: 'Phone number is too long' };
+  }
+  return { ok: false, reason: 'Phone number format not recognised — try +91 followed by 10 digits' };
 }
 
 export default function LoginPage() {
@@ -58,8 +77,9 @@ export default function LoginPage() {
       toast.error('Please fill in all fields');
       return;
     }
-    if (!looksValid(identifier)) {
-      toast.error('Enter a valid email or phone number');
+    const check = classifyInput(identifier);
+    if (!check.ok) {
+      toast.error(check.reason);
       return;
     }
 

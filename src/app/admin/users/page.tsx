@@ -12,6 +12,7 @@ import Button from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import VehiclesEditor, { type VehicleDraft } from '@/components/ui/VehiclesEditor';
 import AdminTagBadges from '@/components/admin-tags/AdminTagBadges';
+import { normalizePhoneE164 } from '@/lib/phone';
 
 type ResidentFilter = 'owner' | 'tenant' | 'unspecified';
 const FILTER_OPTIONS: { id: ResidentFilter; label: string; emoji: string }[] = [
@@ -262,9 +263,24 @@ export default function AdminUsersPage() {
       }
     }
 
+    // Normalize phone before write so the phone-as-username lookup at
+    // /api/auth/resolve-identifier finds this row at login time. Empty =>
+    // clear (NULL); a non-empty unparseable value blocks the save.
+    const rawPhone = editForm.phone.trim();
+    let phoneToSave: string | null = null;
+    if (rawPhone) {
+      const normalized = normalizePhoneE164(rawPhone);
+      if (!normalized) {
+        setSaving(false);
+        toast.error('Phone format not recognised. Use +91 followed by 10 digits or leave blank.');
+        return;
+      }
+      phoneToSave = normalized;
+    }
+
     const payload = {
       full_name: editForm.full_name.trim(),
-      phone: editForm.phone.trim() || null,
+      phone: phoneToSave,
       flat_number: editForm.flat_number.trim() || null,
       resident_type: editForm.resident_type === '' ? null : editForm.resident_type,
       role: editForm.role,
@@ -273,7 +289,14 @@ export default function AdminUsersPage() {
     };
     const { error } = await supabase.from('profiles').update(payload).eq('id', editing.id);
     setSaving(false);
-    if (error) { toast.error(error.message); return; }
+    if (error) {
+      if (/duplicate key|unique constraint|profiles_phone_unique_idx/i.test(error.message)) {
+        toast.error('That phone number is already linked to another account.');
+        return;
+      }
+      toast.error(error.message);
+      return;
+    }
     toast.success(`${payload.full_name} updated`);
     closeEdit();
     fetchUsers();
