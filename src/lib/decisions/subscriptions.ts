@@ -1,7 +1,7 @@
 import 'server-only';
 import { createAdminSupabaseClient } from '@/lib/supabase-admin';
 import { logAdminAction } from '@/lib/admin-audit';
-import { notify } from '@/lib/notify';
+import { notifyAfter } from '@/lib/notify';
 import type { DecisionActor, DecisionResult } from '@/lib/decisions/registrations';
 
 // ============================================================
@@ -115,11 +115,11 @@ export async function approveSubscription(
     request: actor.request,
   });
 
-  notify('subscription_decided', sub.id, {
+  notifyAfter('subscription_decided', sub.id, {
     subscriptionId: sub.id,
     requesterId: sub.primary_user_id,
     approved: true,
-  }).catch(() => {});
+  });
 
   return {
     ok: true,
@@ -176,12 +176,12 @@ export async function rejectSubscription(
     request: actor.request,
   });
 
-  notify('subscription_decided', sub.id, {
+  notifyAfter('subscription_decided', sub.id, {
     subscriptionId: sub.id,
     requesterId: sub.primary_user_id,
     approved: false,
     rejectedReason: cleanReason,
-  }).catch(() => {});
+  });
 
   return {
     ok: true,

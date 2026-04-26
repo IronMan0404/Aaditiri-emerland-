@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/fund-auth';
 import { rupeesToPaise } from '@/lib/money';
-import { notify } from '@/lib/notify';
+import { notifyAfter } from '@/lib/notify';
 import { logAdminAction } from '@/lib/admin-audit';
 import type { FundRecurringPeriod, FundVisibility } from '@/types/funds';
 
@@ -135,11 +135,11 @@ export async function POST(req: Request) {
   });
 
   if (body.notify && data.visibility === 'all_residents') {
-    notify('fund_created', data.id, {
+    notifyAfter('fund_created', data.id, {
       fundId: data.id,
       name: data.name,
       suggestedPerFlatPaise: data.suggested_per_flat ?? null,
-    }).catch(() => {});
+    });
   }
 
   return NextResponse.json({ fund: data });

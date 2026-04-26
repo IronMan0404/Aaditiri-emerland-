@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
-import { notify } from '@/lib/notify';
+import { notifyAfter } from '@/lib/notify';
 import type { DirectoryVoteKind } from '@/types';
 
 export const runtime = 'nodejs';
@@ -91,11 +91,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     typeof updated.report_count === 'number' &&
     updated.report_count >= 1
   ) {
-    notify('phonebook_entry_reported', id, {
+    notifyAfter('phonebook_entry_reported', id, {
       contactId: id,
       contactName: updated.name ?? '(unnamed)',
       reportCount: updated.report_count,
-    }).catch(() => {});
+    });
   }
 
   return NextResponse.json({ contact: updated });

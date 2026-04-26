@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient, isAdminClientConfigured } from '@/lib/supabase-admin';
 import { sendEmail, isEmailConfigured } from '@/lib/email';
 import { consume, getClientIp } from '@/lib/rate-limit';
-import { notify } from '@/lib/notify';
+import { notifyAfter } from '@/lib/notify';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -183,11 +183,11 @@ export async function POST(req: Request) {
   // Failures here MUST NOT fail the registration — the user is already
   // created.
   if (!profileErr) {
-    notify('registration_submitted', userId, {
+    notifyAfter('registration_submitted', userId, {
       profileId: userId,
       fullName,
       flatNumber,
-    }).catch(() => {});
+    });
   }
 
   if (Array.isArray(body.vehicles) && body.vehicles.length > 0) {

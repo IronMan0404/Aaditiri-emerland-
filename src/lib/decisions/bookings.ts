@@ -1,7 +1,7 @@
 import 'server-only';
 import { createAdminSupabaseClient } from '@/lib/supabase-admin';
 import { logAdminAction } from '@/lib/admin-audit';
-import { notify } from '@/lib/notify';
+import { notifyAfter } from '@/lib/notify';
 import type { DecisionActor, DecisionResult } from '@/lib/decisions/registrations';
 
 // ============================================================
@@ -82,11 +82,11 @@ export async function approveBooking(
     request: actor.request,
   });
 
-  notify('booking_decided', bookingId, {
+  notifyAfter('booking_decided', bookingId, {
     bookingId,
     requesterId: before.user_id,
     approved: true,
-  }).catch(() => {});
+  });
 
   return {
     ok: true,
@@ -147,11 +147,11 @@ export async function rejectBooking(
     request: actor.request,
   });
 
-  notify('booking_decided', bookingId, {
+  notifyAfter('booking_decided', bookingId, {
     bookingId,
     requesterId: before.user_id,
     approved: false,
-  }).catch(() => {});
+  });
 
   return {
     ok: true,

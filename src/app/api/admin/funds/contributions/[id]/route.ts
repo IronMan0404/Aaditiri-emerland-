@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/fund-auth';
-import { notify } from '@/lib/notify';
+import { notifyAfter } from '@/lib/notify';
 import { logAdminAction } from '@/lib/admin-audit';
 
 interface ActionBody {
@@ -54,13 +54,13 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     });
 
     if (existing.resident_id) {
-      notify('fund_contribution_verified', id, {
+      notifyAfter('fund_contribution_verified', id, {
         contributionId: id,
         fundId: existing.fund_id,
         residentId: existing.resident_id,
         isInKind: existing.is_in_kind,
         amountPaise: existing.amount ?? null,
-      }).catch(() => {});
+      });
     }
     return NextResponse.json({ contribution: data });
   }
@@ -96,12 +96,12 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     });
 
     if (existing.resident_id) {
-      notify('fund_contribution_rejected', id, {
+      notifyAfter('fund_contribution_rejected', id, {
         contributionId: id,
         fundId: existing.fund_id,
         residentId: existing.resident_id,
         reason,
-      }).catch(() => {});
+      });
     }
     return NextResponse.json({ contribution: data });
   }

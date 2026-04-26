@@ -1,7 +1,7 @@
 import 'server-only';
 import { createAdminSupabaseClient } from '@/lib/supabase-admin';
 import { logAdminAction } from '@/lib/admin-audit';
-import { notify } from '@/lib/notify';
+import { notifyAfter } from '@/lib/notify';
 
 // ============================================================
 // Shared registration approval / rejection helpers.
@@ -105,7 +105,7 @@ export async function approveRegistration(
 
   // Notify the requester. Failures here MUST NOT fail the approval
   // itself; the admin already saw it succeed.
-  notify('registration_decided', profileId, { profileId, approved: true }).catch(() => {});
+  notifyAfter('registration_decided', profileId, { profileId, approved: true });
 
   return {
     ok: true,
@@ -156,7 +156,7 @@ export async function rejectRegistration(
     request: actor.request,
   });
 
-  notify('registration_decided', profileId, { profileId, approved: false }).catch(() => {});
+  notifyAfter('registration_decided', profileId, { profileId, approved: false });
 
   return {
     ok: true,

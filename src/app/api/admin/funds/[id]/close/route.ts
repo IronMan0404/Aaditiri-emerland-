@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/fund-auth';
-import { notify } from '@/lib/notify';
+import { notifyAfter } from '@/lib/notify';
 import { formatINR } from '@/lib/money';
 import { logAdminAction } from '@/lib/admin-audit';
 
@@ -157,12 +157,12 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   });
 
   if (body.notify && closed.visibility === 'all_residents') {
-    notify('fund_closed', closed.id, {
+    notifyAfter('fund_closed', closed.id, {
       fundId: closed.id,
       name: closed.name,
       surplusPaise: surplus,
       closureNotes: body.closure_notes.trim(),
-    }).catch(() => {});
+    });
   }
 
   return NextResponse.json({ fund: closed, surplus });

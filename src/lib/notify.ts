@@ -1,4 +1,5 @@
 import 'server-only';
+import { after } from 'next/server';
 import { createAdminSupabaseClient } from '@/lib/supabase-admin';
 import { sendPushToUsers, isPushConfigured } from '@/lib/push';
 import { sendTelegramToUsers, isTelegramConfigured } from '@/lib/telegram';
@@ -243,6 +244,50 @@ export async function notify<K extends NotificationKind>(
   await writeAudit(kind, refId, audience.length, pushOutcome, telegramOutcome);
 
   return { audienceSize: audience.length, pushOutcome, telegramOutcome };
+}
+
+// ============================================================
+// Fire-and-forget wrapper that runs notify() AFTER the response
+// has been streamed back via Next's `after()` (Vercel `waitUntil`).
+//
+// Why this exists:
+//   On Vercel serverless, an un-awaited promise inside a route
+//   handler is silently killed the moment the function returns. We
+//   discovered this in production when /api/bookings inserted rows
+//   correctly but never wrote a notification_events row — the
+//   `notify().catch(() => {})` call started, and the platform
+//   yanked the runtime out from under it before the dispatcher
+//   could finish reading audience / firing channels. Symptoms:
+//   booking succeeds, no push, no Telegram, empty audit log.
+//
+// Use this from any route handler that wants to dispatch but
+// doesn't need to surface the outcome to the caller. If the caller
+// IS interested in the outcome (e.g. the broadcasts API returns
+// the per-channel result to its UI), keep using `await notify()`.
+//
+// Falls back to inline best-effort if `after()` isn't available
+// (e.g. when called from a non-request context like a script). In
+// that case the work runs inline + the call site keeps waiting,
+// which is fine — that path is non-serverless.
+// ============================================================
+export function notifyAfter<K extends NotificationKind>(
+  kind: K,
+  refId: string,
+  payload: NotificationPayloads[K],
+): void {
+  const work = async (): Promise<void> => {
+    try {
+      await notify(kind, refId, payload);
+    } catch (err) {
+      console.error(`[notify] ${kind}/${refId} failed`, err);
+    }
+  };
+  try {
+    after(work);
+  } catch (err) {
+    console.error('[notify] after() unavailable, running inline', err);
+    void work();
+  }
 }
 
 // ============================================================

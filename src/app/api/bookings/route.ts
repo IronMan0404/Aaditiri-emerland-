@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
 import { createAdminSupabaseClient, isAdminClientConfigured } from '@/lib/supabase-admin';
-import { notify } from '@/lib/notify';
+import { notifyAfter } from '@/lib/notify';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -135,13 +135,19 @@ export async function POST(req: Request) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   // Best-effort fan-out: ping admins (with Telegram inline buttons)
-  // and echo the requester. Failures don't fail the booking.
-  notify('booking_submitted', inserted.id, {
+  // and echo the requester. Runs via Next's `after()` (Vercel
+  // `waitUntil`) so the resident doesn't pay push + Telegram
+  // round-trip latency, and — critically — the platform doesn't
+  // kill the work the moment this function returns. Plain
+  // fire-and-forget `notify(...).catch(...)` is silently dropped on
+  // Vercel serverless, which is why bookings used to insert rows
+  // but never notify anyone.
+  notifyAfter('booking_submitted', inserted.id, {
     bookingId: inserted.id,
     requesterId: user.id,
     facilityName: facility.name,
     whenLabel: `${body.date} · ${body.time_slot}`,
-  }).catch(() => {});
+  });
 
   return NextResponse.json({ ok: true, id: inserted.id });
 }

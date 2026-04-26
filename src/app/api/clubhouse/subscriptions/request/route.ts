@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
-import { notify } from '@/lib/notify';
+import { notifyAfter } from '@/lib/notify';
 import type { ClubhouseRequestMonths } from '@/types';
 
 // Resident-facing endpoint for submitting a clubhouse subscription
@@ -111,14 +111,16 @@ export async function POST(req: Request) {
   }
 
   // Fan out to admins (with Telegram inline Approve/Reject) and
-  // echo the requester. Failures don't fail the request.
-  notify('subscription_requested', inserted.id, {
+  // echo the requester. Failures don't fail the request. Uses
+  // notifyAfter so the dispatch keeps running after we return —
+  // Vercel kills un-awaited promises otherwise.
+  notifyAfter('subscription_requested', inserted.id, {
     subscriptionId: inserted.id,
     requesterId: user.id,
     flatNumber: profile.flat_number,
     tierName: tier.name,
     months,
-  }).catch(() => {});
+  });
 
   return NextResponse.json({ ok: true, id: inserted.id });
 }
