@@ -82,26 +82,34 @@ export type NotificationPayloads = {
 
   // ---- approval flows -----------------------------------------------
   //
-  // Each approval flow now fires TWO notification kinds at submit time:
+  // Each approval flow fires TWO notification kinds at submit time:
   //
-  //   *_submitted / *_requested  → admins only (excluding the
-  //                                requester themselves, in case the
-  //                                requester is also an admin)
+  //   *_submitted / *_requested  → ALL admins (including the
+  //                                requester themselves if they
+  //                                happen to be an admin). They are
+  //                                the audience that needs to ACT
+  //                                on the request.
   //   *_acknowledged             → just the requester, "your X is
   //                                queued" copy. Plain confirmation,
   //                                no admin-action buttons.
+  //
+  // Why both go to admin-who-books: the admin card carries the
+  // Approve/Reject buttons; an admin who books their own clubhouse
+  // slot still needs to approve it (we don't auto-approve admin
+  // bookings). Earlier we tried excluding self from the admin
+  // audience, but that broke the single-admin case — the audience
+  // resolved to [] and the admin got no actionable card at all.
+  // Sending the admin card to the booker too is the safer default:
+  // the inline buttons let them self-approve in one tap from
+  // Telegram, OR they can ignore them and let a co-admin act later.
+  // Two messages > zero messages.
   //
   // Why two kinds instead of one with conditional copy: the renderer
   // is a pure function of the payload, and it has no Supabase client
   // to look up "is this user_id an admin?". Splitting them keeps the
   // render() functions simple and lets each side dedup independently
-  // through the existing `notify()` ledger.
-  //
-  // For an admin who books their own clubhouse slot: the admin-card
-  // (with Approve/Reject buttons) goes to OTHER admins, and the admin
-  // themselves gets the resident-side "queued" card. Their own
-  // approval can still be done from the app — they don't get a
-  // self-approve button in their own DM.
+  // through the existing `notify()` ledger (the refIds use a
+  // distinguishing suffix so the two never collide).
   registration_submitted: { profileId: string; fullName: string; flatNumber: string | null };
   registration_acknowledged: { profileId: string };
   registration_decided: { profileId: string; approved: boolean };
@@ -239,6 +247,30 @@ export type NotificationPayloads = {
     /** Resolved at fire time. May be null if the creating admin's profile was deleted. */
     senderName: string | null;
   };
+
+  // ---- admin-mediated password recovery ---------------------------
+  // Resident with no email and no paired Telegram submitted a
+  // request from /auth/forgot-password. Fans out to every admin so
+  // someone can verify identity out-of-band and reset.
+  admin_recovery_requested: {
+    requestId: string;
+    /** Resident's profile id, used by the renderer to build a deep-link. */
+    profileId: string;
+    fullName: string | null;
+    flatNumber: string | null;
+    phone: string | null;
+    contactNote: string | null;
+  };
+  // Admin pressed Verify & reset. Goes only to the resident — push
+  // typically lands on whatever device they registered from. Body
+  // intentionally does NOT include the temp password (the admin
+  // delivers that out-of-band).
+  admin_recovery_resolved: {
+    requestId: string;
+    profileId: string;
+    /** Admin who handled the reset. Resolved at fire time. */
+    adminName: string | null;
+  };
 };
 
 export type NotificationKind = keyof NotificationPayloads;
@@ -282,22 +314,6 @@ async function allApprovedResidents(supabase: SupabaseClient): Promise<string[]>
 async function allAdmins(supabase: SupabaseClient): Promise<string[]> {
   const { data } = await supabase.from('profiles').select('id').eq('role', 'admin');
   return (data ?? []).map((r: { id: string }) => r.id);
-}
-
-/**
- * Admins minus a given user id. Used by approval-submission kinds
- * so an admin who books / requests a subscription / registers their
- * own account doesn't receive the admin-action card alongside the
- * resident "queued" card. They just get the resident card; OTHER
- * admins get the admin card and can approve from there.
- */
-async function adminsExcept(
-  supabase: SupabaseClient,
-  userId: string | null | undefined,
-): Promise<string[]> {
-  const admins = await allAdmins(supabase);
-  if (!userId) return admins;
-  return admins.filter((id) => id !== userId);
 }
 
 // ---------- Renderers ------------------------------------------------
@@ -449,10 +465,11 @@ export const ROUTING: RoutingTable = {
   // APPROVAL FLOWS — admins + requester echo
   // ────────────────────────────────────────────────────────────────
   registration_submitted: {
-    // Admins only, excluding the new resident themselves (in case
-    // they were already an admin somehow — defensive). The resident
-    // gets `registration_acknowledged` separately.
-    audience: async ({ profileId }, sb) => adminsExcept(sb, profileId),
+    // All admins. A brand-new registration's profileId is never in
+    // the admin set (the user can't be admin AND awaiting approval),
+    // so allAdmins() and adminsExcept(profileId) are equivalent here.
+    // We use allAdmins for consistency with booking/subscription.
+    audience: (_p, sb) => allAdmins(sb),
     render: ({ profileId, fullName, flatNumber }) => ({
       push: {
         title: 'New registration',
@@ -504,12 +521,15 @@ export const ROUTING: RoutingTable = {
       push: {
         title: approved ? 'Registration approved' : 'Registration update',
         body: approved
-          ? 'Welcome to Aaditri Emerland! You can now access the app.'
+          ? 'Welcome to Aaditri Emerland! Tip: pair Telegram in your profile for instant updates and password reset.'
           : 'Your registration was not approved. Please contact the admin team.',
-        url: approved ? '/dashboard' : '/auth/pending',
+        url: approved ? '/dashboard/profile#telegram' : '/auth/pending',
         tag: 'registration-decision',
       },
       telegram: {
+        // If we got here it means the resident already paired pre-approval —
+        // rare but possible. Skip the "pair Telegram" tip (they already did)
+        // and just welcome them.
         text: approved
           ? '*Welcome to Aaditri Emerland\\!*\nYour registration has been approved\\.'
           : '*Registration update*\nYour registration was not approved\\. Please contact the admin team\\.',
@@ -521,11 +541,11 @@ export const ROUTING: RoutingTable = {
   },
 
   subscription_requested: {
-    // Admins only, excluding the requester themselves. The requester
-    // gets `subscription_acknowledged` separately so admins-who-book
-    // see the personal "queued" card instead of an Approve-yourself
-    // button on their own request.
-    audience: async ({ requesterId }, sb) => adminsExcept(sb, requesterId),
+    // ALL admins. An admin who requests a subscription for their own
+    // flat still needs the Approve/Reject card — we don't auto-approve
+    // admin-initiated subscriptions. They also get a separate
+    // `subscription_acknowledged` resident-side echo via the dispatcher.
+    audience: (_p, sb) => allAdmins(sb),
     render: ({ subscriptionId, flatNumber, tierName, months }) => ({
       push: {
         title: 'Clubhouse subscription request',
@@ -625,11 +645,15 @@ export const ROUTING: RoutingTable = {
   },
 
   booking_submitted: {
-    // Admins only, excluding the requester themselves. The requester
-    // gets `booking_acknowledged` instead — that way an admin who
-    // books their own slot doesn't see an Approve button for their
-    // own request, just the resident "queued" confirmation.
-    audience: async ({ requesterId }, sb) => adminsExcept(sb, requesterId),
+    // ALL admins, including the booker if they're an admin. An admin
+    // who books still needs the Approve/Reject buttons (we don't
+    // auto-approve admin bookings). The booker also gets the resident-
+    // side `booking_acknowledged` notification on a different refId,
+    // so admin-bookers see TWO Telegram messages: one resident-style
+    // ("queued") and one admin-style (with action buttons). This is
+    // the right outcome — the alternative (excluding self) breaks the
+    // single-admin society case where the audience resolves to [].
+    audience: (_p, sb) => allAdmins(sb),
     render: ({
       bookingId,
       facilityName,
@@ -1011,6 +1035,87 @@ export const ROUTING: RoutingTable = {
           md(clip(body, 1200)),
         ].join('\n'),
         buttons: [{ text: 'Open app', url: '/dashboard' }],
+      },
+    }),
+  },
+
+  // ---- admin-mediated password recovery ---------------------------
+  //
+  // Audience: all admins (including the requester themselves only if
+  // they happen to be an admin, which is the corner case of an admin
+  // who lost both their email and Telegram). If an admin is locked
+  // out, every admin should see the request so co-admins can act —
+  // including the locked-out one if they somehow regain admin-side
+  // access first.
+  //
+  // The push body deliberately does NOT include the resident's
+  // phone number — that's PII we don't want appearing in OS
+  // notification banners on co-admin devices. The Telegram message
+  // can show it because the bot DM is a private channel.
+  admin_recovery_requested: {
+    audience: (_p, sb) => allAdmins(sb),
+    render: ({ requestId, profileId, fullName, flatNumber, contactNote, phone }) => {
+      const who = [fullName ?? 'Resident', flatNumber ? `Flat ${flatNumber}` : null]
+        .filter(Boolean)
+        .join(' · ');
+      return {
+        push: {
+          title: 'Password recovery request',
+          body: `${who} needs help signing in. Open Manage Users to verify and reset.`,
+          url: `/admin/users?recovery=${requestId}#recovery`,
+          tag: `admin-recovery:${requestId}`,
+        },
+        telegram: {
+          text: [
+            '*Password recovery request*',
+            md(who),
+            phone ? `Phone: \`${md(phone)}\`` : null,
+            contactNote ? '' : null,
+            contactNote ? `_Note:_ ${md(clip(contactNote, 400))}` : null,
+            '',
+            '_Verify the resident out\\-of\\-band, then tap to reset:_',
+          ]
+            .filter((s): s is string => s !== null)
+            .join('\n'),
+          buttons: [
+            // No callback approve button on purpose. Resetting a
+            // password requires the admin to physically read the
+            // temp password to the resident, so this MUST happen on
+            // a real device with the admin UI open. The Telegram
+            // tap just deep-links them there.
+            { text: 'Open recovery panel', url: `/admin/users?recovery=${requestId}#recovery` },
+            { text: 'View profile', url: `/admin/users#${profileId}` },
+          ],
+        },
+      };
+    },
+  },
+
+  admin_recovery_resolved: {
+    audience: async ({ profileId }) => [profileId],
+    render: ({ adminName }) => ({
+      push: {
+        // Body says "an admin" rather than the admin's name on
+        // purpose — push body shows in OS lockscreen and we don't
+        // need to reveal which admin acted to anyone glancing at
+        // the resident's phone.
+        title: 'Password reset by admin',
+        body: 'Your password has been reset. The admin will share your temporary password. Sign in and change it from your profile.',
+        url: '/auth/login',
+        tag: 'admin-recovery-resolved',
+      },
+      telegram: {
+        // Inside Telegram DM the admin's name is fine to surface —
+        // the channel is private to the resident.
+        text: [
+          '*Password reset*',
+          adminName
+            ? `_${md(adminName)} reset your password\\._`
+            : '_An admin reset your password\\._',
+          '',
+          'Sign in with the temporary password they share with you, then change it from your profile\\.',
+        ].join('\n'),
+        buttons: [{ text: 'Open app', url: '/auth/login' }],
       },
     }),
   },

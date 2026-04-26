@@ -10,6 +10,7 @@ import VehiclesEditor, { type VehicleDraft } from '@/components/ui/VehiclesEdito
 import FamilyEditor, { type FamilyMemberDraft } from '@/components/ui/FamilyEditor';
 import PetsEditor, { type PetDraft } from '@/components/ui/PetsEditor';
 import { normalizePhoneE164 } from '@/lib/phone';
+import { createClient } from '@/lib/supabase';
 
 export default function RegisterPage() {
   const [form, setForm] = useState({
@@ -109,12 +110,46 @@ export default function RegisterPage() {
     setSubmittedEmail(email);
     setSubmitted(true);
     setLoading(false);
+
+    // Auto-sign-in the freshly registered (unapproved) user so they can
+    // pair Telegram from /auth/pending while waiting for admin approval.
+    // Best-effort: if it fails (e.g. transient network blip, or the
+    // resolver fallback doesn't find the phone), we just leave the
+    // user on the success screen with the "Go to Login" CTA. The
+    // pairing-while-waiting flow is a nice-to-have, not the critical
+    // path.
+    try {
+      const supabase = createClient();
+      let signInEmail = email;
+      // Phone-only signup: hit the email resolver to get the
+      // synthetic email Supabase stores against this phone number.
+      if (!signInEmail && phoneNormalized) {
+        const r = await fetch('/api/auth/resolve-identifier', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ identifier: phoneNormalized }),
+        });
+        if (r.ok) {
+          const j = (await r.json().catch(() => ({}))) as { email?: string };
+          if (j.email) signInEmail = j.email;
+        }
+      }
+      if (signInEmail) {
+        await supabase.auth.signInWithPassword({
+          email: signInEmail,
+          password: form.password,
+        });
+      }
+    } catch {
+      // Silent — we already showed the user the success screen,
+      // and they can sign in manually from /auth/login.
+    }
   }
 
   if (submitted) {
     return (
       <AuthShell>
-        <div className="w-full max-w-sm bg-white/95 backdrop-blur-sm rounded-2xl p-8 shadow-2xl text-center">
+        <div className="w-full max-w-sm bg-white/95 backdrop-blur-sm rounded-2xl p-7 shadow-2xl text-center">
           <div className="w-16 h-16 rounded-full bg-amber-100 flex items-center justify-center mx-auto mb-4">
             <span className="text-3xl">⏳</span>
           </div>
@@ -125,24 +160,52 @@ export default function RegisterPage() {
           </p>
           {submittedEmail ? (
             emailDelivered ? (
-              <p className="text-gray-500 text-xs mb-6">
+              <p className="text-gray-500 text-xs mb-4">
                 We&apos;ve sent a confirmation email to <strong>{submittedEmail}</strong>.
                 Don&apos;t see it? Check your spam folder.
               </p>
             ) : (
-              <p className="text-amber-600 text-xs mb-6">
+              <p className="text-amber-600 text-xs mb-4">
                 We couldn&apos;t send a confirmation email this time, but your
                 account was still created. Please reach out to an admin if you
                 need help.
               </p>
             )
           ) : (
-            <p className="text-gray-500 text-xs mb-6">
+            <p className="text-gray-500 text-xs mb-4">
               We&apos;ll let you know via the contact details you registered with
               once an admin approves your account.
             </p>
           )}
-          <Button onClick={() => router.push('/auth/login')} className="w-full">Go to Login</Button>
+          {/*
+           * Bridge to the pending page so the resident can pair Telegram
+           * while the admin is reviewing them. We auto-signed-them-in
+           * after the registration POST, so this routes straight into
+           * the pending shell with the TelegramConnect widget. If the
+           * auto-sign-in failed (e.g. they registered phone-only and
+           * the resolver call hit a network blip), they'll just be
+           * bounced back to /auth/login by the proxy — same as the
+           * old "Go to Login" outcome.
+           */}
+          <div className="bg-[#F5F8FF] border border-[#26A5E4]/30 rounded-xl p-3 mb-4 text-left">
+            <p className="text-xs font-semibold text-[#26A5E4] uppercase tracking-wider mb-1">
+              Tip · Optional
+            </p>
+            <p className="text-xs text-gray-600 leading-snug">
+              Connect Telegram next so you get the approval push the second an
+              admin clicks Approve, and password resets work instantly.
+            </p>
+          </div>
+          <Button onClick={() => router.push('/auth/pending')} className="w-full mb-2">
+            Continue
+          </Button>
+          <button
+            type="button"
+            onClick={() => router.push('/auth/login')}
+            className="text-xs text-gray-500 hover:text-gray-700 underline"
+          >
+            Skip — go to sign in
+          </button>
         </div>
       </AuthShell>
     );

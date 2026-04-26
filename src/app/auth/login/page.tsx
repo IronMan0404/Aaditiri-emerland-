@@ -153,8 +153,14 @@ export default function LoginPage() {
                 {showPwd ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>
             </div>
-            <div className="text-right -mt-2">
-              <Link href="/auth/forgot-password" className="text-xs text-[#1B5E20] font-semibold hover:underline">
+            <div className="flex items-center justify-between -mt-2 gap-3">
+              <span className="text-[11px] text-gray-500 leading-tight">
+                Tip: pair Telegram in your profile to get reset codes instantly.
+              </span>
+              <Link
+                href="/auth/forgot-password"
+                className="text-xs text-[#1B5E20] font-semibold hover:underline whitespace-nowrap"
+              >
                 Forgot password?
               </Link>
             </div>

@@ -121,11 +121,16 @@ export async function POST(req: Request) {
 
   // Primary lookup: canonical E.164 form (the one the client will normalize
   // to and the one we now write at registration / profile-edit time).
-  let { data: profile, error } = await admin
+  // `profile` is `let` because the legacy-variant fallback below may
+  // reassign it; `error` is genuinely const so we destructure it
+  // separately to keep the linter happy.
+  const primary = await admin
     .from('profiles')
     .select('email, phone')
     .eq('phone', classified.phone)
     .maybeSingle();
+  let profile = primary.data;
+  const { error } = primary;
 
   if (error) {
     return NextResponse.json(

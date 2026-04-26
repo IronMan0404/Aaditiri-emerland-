@@ -5,7 +5,7 @@ import toast from 'react-hot-toast';
 import Button from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import AuthShell from '@/components/layout/AuthShell';
-import { Mail, Send, ShieldCheck, KeyRound, Eye, EyeOff } from 'lucide-react';
+import { Mail, Send, ShieldCheck, KeyRound, Eye, EyeOff, UserCheck, Clock } from 'lucide-react';
 import { normalizePhoneE164 } from '@/lib/phone';
 
 // =============================================================
@@ -37,6 +37,8 @@ type Step =
   | 'await-otp'
   | 'choose-password'
   | 'email-sent'
+  | 'request-admin'
+  | 'admin-submitted'
   | 'done';
 
 interface ChannelInfo {
@@ -82,6 +84,15 @@ export default function ForgotPasswordPage() {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPwd, setShowPwd] = useState(false);
+
+  // Admin-recovery branch — used when neither email nor Telegram
+  // is available for this account. Resident types a contact note,
+  // we POST it to /api/auth/forgot-password/admin-recover, an admin
+  // gets paged, admin verifies identity out-of-band and resets
+  // their password from /admin/users.
+  const [contactNote, setContactNote] = useState('');
+  const [adminRequestSubmittedAt, setAdminRequestSubmittedAt] = useState<string | null>(null);
+  const [adminRequestAlreadyPending, setAdminRequestAlreadyPending] = useState(false);
 
   // Live countdown for the OTP TTL — small UX touch so the resident
   // knows when their code is going to lapse.
@@ -281,6 +292,44 @@ export default function ForgotPasswordPage() {
     }
   }
 
+  async function handleAdminRecoverSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!lookupId) {
+      toast.error('Session expired. Start again.');
+      setStep('identify');
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await fetch('/api/auth/forgot-password/admin-recover', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          lookup_id: lookupId,
+          contact_note: contactNote.trim() || null,
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        submitted?: boolean;
+        already_pending?: boolean;
+        submitted_at?: string;
+        error?: string;
+      };
+      if (!res.ok || !data.ok) {
+        toast.error(data.error || 'Could not submit request.');
+        return;
+      }
+      setAdminRequestSubmittedAt(data.submitted_at ?? new Date().toISOString());
+      setAdminRequestAlreadyPending(Boolean(data.already_pending));
+      setStep('admin-submitted');
+    } catch {
+      toast.error('Network error. Please try again.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   // ---------- Render helpers ----------
 
   return (
@@ -351,9 +400,28 @@ export default function ForgotPasswordPage() {
               />
 
               {!channels.has_email && !channels.has_telegram && (
-                <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
-                  <strong>No reset channels are configured for this account.</strong>{' '}
-                  Please contact an admin to recover access.
+                <div className="space-y-3">
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                    <strong>Neither email nor Telegram is set up for this account.</strong>{' '}
+                    No problem — request an admin reset and someone from the team will
+                    verify you and reset your password in person or by phone.
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full"
+                    onClick={() => setStep('request-admin')}
+                  >
+                    <UserCheck size={16} />
+                    Request admin reset
+                  </Button>
+                </div>
+              )}
+
+              {channels.has_email && !channels.has_telegram && (
+                <div className="rounded-lg border border-emerald-100 bg-emerald-50 p-3 text-[11px] text-emerald-800 leading-snug">
+                  <strong>Tip:</strong> after you&apos;re signed in, pair Telegram in
+                  your profile and we&apos;ll DM your reset code instantly next time.
                 </div>
               )}
 
@@ -446,6 +514,65 @@ export default function ForgotPasswordPage() {
                 We&apos;ve sent a reset link to <strong>{channels.masked_email}</strong>. The link is
                 valid for a limited time.
               </p>
+              <Link href="/auth/login" className="block">
+                <Button variant="secondary" className="w-full">
+                  Back to Sign In
+                </Button>
+              </Link>
+            </div>
+          )}
+
+          {step === 'request-admin' && (
+            <form onSubmit={handleAdminRecoverSubmit} className="space-y-4">
+              <div className="rounded-lg border border-amber-100 bg-amber-50 p-3 text-xs text-amber-800 leading-snug">
+                <strong>Admin will verify and reset your password.</strong> An admin
+                will call or visit you to confirm your identity, then share a temporary
+                password.
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1.5">
+                  How can the admin reach you? <span className="text-gray-400 font-normal">(optional)</span>
+                </label>
+                <textarea
+                  value={contactNote}
+                  onChange={(e) => setContactNote(e.target.value.slice(0, 500))}
+                  placeholder="e.g. I'm at flat 413, please call after 7 PM, or buzz me at the gate."
+                  rows={3}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#1B5E20] focus:border-transparent resize-none"
+                />
+                <p className="text-[10px] text-gray-400 mt-1 text-right">
+                  {contactNote.length}/500
+                </p>
+              </div>
+              <Button type="submit" loading={busy} className="w-full">
+                Submit request
+              </Button>
+              <BackLink onClick={() => setStep('pick')} />
+            </form>
+          )}
+
+          {step === 'admin-submitted' && (
+            <div className="text-center space-y-4">
+              <div className="w-14 h-14 rounded-full bg-amber-100 flex items-center justify-center mx-auto">
+                <Clock className="text-amber-700" size={26} />
+              </div>
+              <h2 className="text-lg font-bold text-gray-900">
+                {adminRequestAlreadyPending ? 'Already in the queue' : 'Request submitted'}
+              </h2>
+              <p className="text-sm text-gray-600">
+                {adminRequestAlreadyPending
+                  ? 'You already have a pending recovery request. An admin will reach out to verify your identity and share a temporary password.'
+                  : 'An admin has been notified. They will verify your identity (in person or by phone) and share a temporary password with you. Once you sign in, change your password from your profile.'}
+              </p>
+              {adminRequestSubmittedAt && (
+                <p className="text-[11px] text-gray-400">
+                  Submitted{' '}
+                  {new Date(adminRequestSubmittedAt).toLocaleString(undefined, {
+                    dateStyle: 'medium',
+                    timeStyle: 'short',
+                  })}
+                </p>
+              )}
               <Link href="/auth/login" className="block">
                 <Button variant="secondary" className="w-full">
                   Back to Sign In

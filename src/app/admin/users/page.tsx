@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import { Shield, ShieldOff, CheckCircle, Search, X, Pencil, AlertTriangle, Bot, Car, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { createClient } from '@/lib/supabase';
@@ -13,6 +13,7 @@ import { Input } from '@/components/ui/Input';
 import VehiclesEditor, { type VehicleDraft } from '@/components/ui/VehiclesEditor';
 import AdminTagBadges from '@/components/admin-tags/AdminTagBadges';
 import { normalizePhoneE164 } from '@/lib/phone';
+import RecoveryRequestsPanel from '@/components/admin/RecoveryRequestsPanel';
 
 type ResidentFilter = 'owner' | 'tenant' | 'unspecified';
 const FILTER_OPTIONS: { id: ResidentFilter; label: string; emoji: string }[] = [
@@ -310,6 +311,14 @@ export default function AdminUsersPage() {
           <span className="bg-red-100 text-red-600 text-xs font-bold px-3 py-1 rounded-full">{pending.length} pending</span>
         )}
       </div>
+
+      {/* Password recovery requests — auto-hidden when there are none.
+          Wrapped in Suspense because it uses useSearchParams() to honour
+          ?recovery=<id> deep-links from admin Telegram DMs (Next 16
+          requires that consumer to live inside a Suspense boundary). */}
+      <Suspense fallback={null}>
+        <RecoveryRequestsPanel />
+      </Suspense>
 
       <div className="flex bg-gray-100 rounded-xl p-1 mb-3">
         {(['pending', 'all'] as const).map((t) => (

@@ -211,7 +211,7 @@ export default function ProfilePage() {
       </div>
 
       {/* Notifications */}
-      <div className="bg-white rounded-2xl p-4 shadow-sm mb-4">
+      <div id="telegram" className="bg-white rounded-2xl p-4 shadow-sm mb-4 scroll-mt-20">
         <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Notifications</h3>
         <TelegramConnect />
       </div>

@@ -26,8 +26,18 @@ import { consume } from '@/lib/rate-limit';
 //     row). The bot side is left intact — if the user types /start
 //     in the bot again it'll just say "not linked".
 //
-// All three require an authenticated, approved profile. We don't
-// expose chat_id or any cross-user data.
+// All three require an authenticated profile (any state — pending,
+// approved, even bots-flagged are fine for the lookup endpoints).
+// We don't expose chat_id or any cross-user data.
+//
+// Why approval is NOT required: a brand-new resident sitting on
+// /auth/pending should be able to pair Telegram so the moment admin
+// approves them, the approval push lands in their bot DM. Pairing
+// is a binding between an auth user and a Telegram chat — it has
+// nothing to do with whether the resident is allowed to read
+// announcements or book the clubhouse, which is what is_approved
+// controls. Forcing approval-before-pair just creates a chicken-
+// and-egg cycle for password recovery in the unapproved state.
 // ============================================================
 
 export const dynamic = 'force-dynamic';
@@ -43,7 +53,7 @@ interface AuthedUser {
   isApproved: boolean;
 }
 
-async function requireApprovedUser(): Promise<
+async function requireAuthedUser(): Promise<
   { ok: true; user: AuthedUser } | { ok: false; res: NextResponse }
 > {
   const supabase = await createServerSupabaseClient();
@@ -56,7 +66,7 @@ async function requireApprovedUser(): Promise<
   }
   const { data: profile } = await supabase
     .from('profiles')
-    .select('id, is_approved')
+    .select('id, is_approved, is_bot')
     .eq('id', user.id)
     .maybeSingle();
   if (!profile) {
@@ -65,16 +75,19 @@ async function requireApprovedUser(): Promise<
       res: NextResponse.json({ error: 'profile_not_found' }, { status: 404 }),
     };
   }
-  if (!profile.is_approved) {
+  // Bots are tagged `is_bot=true` and have no real human at the
+  // other end. Block them from pairing — there's nothing to pair
+  // them WITH. is_approved is intentionally NOT checked here.
+  if (profile.is_bot) {
     return {
       ok: false,
       res: NextResponse.json(
-        { error: 'not_approved', message: 'Wait for admin approval first.' },
+        { error: 'bot_account', message: 'Bot accounts cannot pair Telegram.' },
         { status: 403 },
       ),
     };
   }
-  return { ok: true, user: { id: profile.id, isApproved: true } };
+  return { ok: true, user: { id: profile.id, isApproved: profile.is_approved } };
 }
 
 /**
@@ -99,7 +112,7 @@ function generatePairingCode(): string {
 // GET — current pairing/link status
 // ============================================================
 export async function GET(): Promise<NextResponse> {
-  const auth = await requireApprovedUser();
+  const auth = await requireAuthedUser();
   if (!auth.ok) return auth.res;
 
   const admin = createAdminSupabaseClient();
@@ -149,7 +162,7 @@ export async function GET(): Promise<NextResponse> {
 // POST — start a pairing flow
 // ============================================================
 export async function POST(req: Request): Promise<NextResponse> {
-  const auth = await requireApprovedUser();
+  const auth = await requireAuthedUser();
   if (!auth.ok) return auth.res;
 
   if (!isTelegramConfigured()) {
@@ -220,7 +233,7 @@ export async function POST(req: Request): Promise<NextResponse> {
 // DELETE — unlink
 // ============================================================
 export async function DELETE(): Promise<NextResponse> {
-  const auth = await requireApprovedUser();
+  const auth = await requireAuthedUser();
   if (!auth.ok) return auth.res;
 
   const admin = createAdminSupabaseClient();
