@@ -326,6 +326,110 @@ create policy "Users can insert their own profile"
   to authenticated
   with check (auth.uid() = id);
 
+-- Block residents from self-promoting to admin / self-approving / claiming
+-- the bot identity. The "Users can update their own profile" policy above
+-- intentionally allows broad self-edit (so name / phone / flat / avatar
+-- updates work), but the *privileged* columns (role, is_approved, is_bot)
+-- must remain admin-only. We enforce this with a BEFORE UPDATE trigger
+-- because RLS in Supabase doesn't natively express column-level WITH CHECK.
+-- The trigger no-ops for service-role writes (auth.uid() is null) so
+-- /api/admin/users/[id]/* and /api/auth/register keep working unchanged.
+-- See migration 20260428_security_hardening.sql for the full rationale.
+create or replace function public.profiles_block_privileged_self_edit()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $func$
+declare
+  v_caller uuid;
+  v_caller_role text;
+begin
+  v_caller := auth.uid();
+  if v_caller is null then return new; end if;
+  select role into v_caller_role from public.profiles where id = v_caller;
+  if v_caller_role = 'admin' then return new; end if;
+  if (new.role is distinct from old.role) then
+    raise exception 'permission denied: cannot change profiles.role' using errcode = '42501';
+  end if;
+  if (new.is_approved is distinct from old.is_approved) then
+    raise exception 'permission denied: cannot change profiles.is_approved' using errcode = '42501';
+  end if;
+  if (new.is_bot is distinct from old.is_bot) then
+    raise exception 'permission denied: cannot change profiles.is_bot' using errcode = '42501';
+  end if;
+  return new;
+end;
+$func$;
+
+drop trigger if exists trg_profiles_block_privileged_self_edit on public.profiles;
+create trigger trg_profiles_block_privileged_self_edit
+  before update on public.profiles
+  for each row execute procedure public.profiles_block_privileged_self_edit();
+
+-- ============================================================
+-- BOOKINGS UPDATE column lock (mirrors 20260503 migration)
+-- Residents may only flip status pending→cancelled. They cannot
+-- mutate facility / date / time_slot / user_id / notes after the
+-- row is created — that would otherwise let them sneak past the
+-- /api/bookings subscription gate retroactively.
+-- Service-role and admin updates bypass the trigger; see
+-- supabase/migrations/20260503_booking_update_trigger.sql for
+-- the full rationale.
+-- ============================================================
+create or replace function public.bookings_block_resident_column_edits()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $func$
+declare
+  v_caller uuid;
+  v_caller_role text;
+begin
+  v_caller := auth.uid();
+  if v_caller is null then return new; end if;
+  select role into v_caller_role from public.profiles where id = v_caller;
+  if v_caller_role = 'admin' then return new; end if;
+  if v_caller is distinct from old.user_id then
+    raise exception 'permission denied: cannot update another resident''s booking' using errcode = '42501';
+  end if;
+  if (new.user_id is distinct from old.user_id) then
+    raise exception 'permission denied: cannot reassign booking' using errcode = '42501';
+  end if;
+  if (new.facility is distinct from old.facility) then
+    raise exception 'permission denied: cannot change booking facility' using errcode = '42501';
+  end if;
+  if (new.date is distinct from old.date) then
+    raise exception 'permission denied: cannot change booking date' using errcode = '42501';
+  end if;
+  if (new.time_slot is distinct from old.time_slot) then
+    raise exception 'permission denied: cannot change booking time slot' using errcode = '42501';
+  end if;
+  if (new.notes is distinct from old.notes) then
+    raise exception 'permission denied: cannot edit booking notes after creation' using errcode = '42501';
+  end if;
+  if (new.created_at is distinct from old.created_at) then
+    raise exception 'permission denied: cannot rewrite booking timestamp' using errcode = '42501';
+  end if;
+  if (new.status is distinct from old.status) then
+    if not (
+      (old.status = 'pending'   and new.status = 'cancelled')
+      or
+      (old.status = 'cancelled' and new.status = 'cancelled')
+    ) then
+      raise exception 'permission denied: residents may only cancel a pending booking' using errcode = '42501';
+    end if;
+  end if;
+  return new;
+end;
+$func$;
+
+drop trigger if exists trg_bookings_block_resident_column_edits on public.bookings;
+create trigger trg_bookings_block_resident_column_edits
+  before update on public.bookings
+  for each row execute procedure public.bookings_block_resident_column_edits();
+
 -- ANNOUNCEMENTS policies
 create policy "Announcements viewable by all authenticated" on public.announcements for select to authenticated using (true);
 create policy "Only admins can insert announcements" on public.announcements for insert to authenticated with check (exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'));
@@ -341,9 +445,40 @@ create policy "RSVPs viewable by authenticated" on public.event_rsvps for select
 create policy "Users can manage their own RSVPs" on public.event_rsvps for all to authenticated using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
 -- BOOKINGS policies
-create policy "Users can view their own bookings" on public.bookings for select to authenticated using (auth.uid() = user_id or exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'));
-create policy "Users can create bookings" on public.bookings for insert to authenticated with check (auth.uid() = user_id);
-create policy "Users can update their own bookings or admins can update any" on public.bookings for update to authenticated using (auth.uid() = user_id or exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'));
+-- Residents can SELECT their own bookings, but they must NOT be able to
+-- INSERT directly (the API at /api/bookings runs the subscription gate
+-- and uses a service-role client to perform the write) and may only
+-- UPDATE their own row to status='cancelled'. Admins retain full
+-- access. See migration 20260428_security_hardening.sql for context.
+drop policy if exists "Users can view their own bookings"                          on public.bookings;
+drop policy if exists "Users can create bookings"                                  on public.bookings;
+drop policy if exists "Users can update their own bookings or admins can update any" on public.bookings;
+drop policy if exists "Admins can insert bookings"                                 on public.bookings;
+drop policy if exists "Residents can cancel own pending bookings, admins update any" on public.bookings;
+
+create policy "Users can view their own bookings"
+  on public.bookings for select to authenticated
+  using (
+    auth.uid() = user_id
+    or exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
+  );
+
+create policy "Admins can insert bookings"
+  on public.bookings for insert to authenticated
+  with check (
+    exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
+  );
+
+create policy "Residents can cancel own pending bookings, admins update any"
+  on public.bookings for update to authenticated
+  using (
+    auth.uid() = user_id
+    or exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
+  )
+  with check (
+    exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
+    or (auth.uid() = user_id and status in ('pending', 'cancelled'))
+  );
 
 -- BROADCASTS policies
 create policy "Broadcasts viewable by all authenticated" on public.broadcasts for select to authenticated using (true);
@@ -1167,6 +1302,345 @@ $$;
 revoke all on function public.prune_admin_audit_log(integer) from public;
 revoke all on function public.prune_admin_audit_log(integer) from authenticated;
 revoke all on function public.prune_admin_audit_log(integer) from anon;
+
+-- ============================================================
+-- DIRECTORY (community phone book)
+-- See migration 20260429_phonebook.sql for the canonical version
+-- and full design notes. Replicated here so fresh installs get
+-- the table without applying the migration separately.
+-- ============================================================
+create table if not exists public.directory_contacts (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  category text not null check (category in (
+    'plumbing', 'electrical', 'carpentry', 'painting', 'pest_control',
+    'lift_amc', 'maid', 'cook', 'nanny', 'driver', 'milkman', 'newspaper',
+    'gas_cylinder', 'laundry', 'tailor', 'cab_auto', 'doctor', 'hospital',
+    'pharmacy', 'police', 'ambulance', 'fire', 'hardware', 'grocery',
+    'rwa_official', 'society_office', 'security_agency', 'other'
+  )),
+  phone text not null,
+  alt_phone text,
+  whatsapp text,
+  notes text,
+  area_served text,
+  hourly_rate numeric(10, 2),
+  is_society_contact boolean not null default false,
+  is_verified boolean not null default false,
+  is_archived boolean not null default false,
+  submitted_by uuid references public.profiles(id) on delete set null,
+  vote_count int not null default 0,
+  report_count int not null default 0,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.directory_votes (
+  id uuid primary key default gen_random_uuid(),
+  contact_id uuid not null references public.directory_contacts(id) on delete cascade,
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  kind text not null check (kind in ('helpful', 'reported')),
+  created_at timestamptz not null default now(),
+  unique(contact_id, user_id, kind)
+);
+
+create index if not exists directory_contacts_category_idx
+  on public.directory_contacts (category) where is_archived = false;
+create index if not exists directory_contacts_society_idx
+  on public.directory_contacts (is_society_contact, is_verified) where is_archived = false;
+create index if not exists directory_contacts_submitted_by_idx
+  on public.directory_contacts (submitted_by) where is_archived = false;
+create index if not exists directory_votes_contact_idx
+  on public.directory_votes (contact_id);
+
+create or replace function public.directory_contacts_set_updated_at()
+returns trigger language plpgsql as $$
+begin new.updated_at := now(); return new; end;
+$$;
+
+drop trigger if exists trg_directory_contacts_updated_at on public.directory_contacts;
+create trigger trg_directory_contacts_updated_at
+  before update on public.directory_contacts
+  for each row execute procedure public.directory_contacts_set_updated_at();
+
+create or replace function public.directory_votes_sync_counters()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare v_contact uuid; v_kind text; v_delta int;
+begin
+  if (tg_op = 'INSERT') then v_contact := new.contact_id; v_kind := new.kind; v_delta := 1;
+  elsif (tg_op = 'DELETE') then v_contact := old.contact_id; v_kind := old.kind; v_delta := -1;
+  else return new; end if;
+  if v_kind = 'helpful' then
+    update public.directory_contacts set vote_count = greatest(0, vote_count + v_delta) where id = v_contact;
+  elsif v_kind = 'reported' then
+    update public.directory_contacts set report_count = greatest(0, report_count + v_delta) where id = v_contact;
+  end if;
+  if (tg_op = 'DELETE') then return old; end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_directory_votes_sync_counters on public.directory_votes;
+create trigger trg_directory_votes_sync_counters
+  after insert or delete on public.directory_votes
+  for each row execute procedure public.directory_votes_sync_counters();
+
+create or replace function public.directory_contacts_block_privileged_self_edit()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare v_caller uuid; v_caller_role text;
+begin
+  v_caller := auth.uid();
+  if v_caller is null then return new; end if;
+  select role into v_caller_role from public.profiles where id = v_caller;
+  if v_caller_role = 'admin' then return new; end if;
+  if (tg_op = 'INSERT') then
+    if new.is_society_contact then raise exception 'permission denied' using errcode = '42501'; end if;
+    if new.is_verified then raise exception 'permission denied' using errcode = '42501'; end if;
+    if new.is_archived then raise exception 'permission denied' using errcode = '42501'; end if;
+    new.submitted_by := v_caller;
+    return new;
+  end if;
+  if (new.is_society_contact is distinct from old.is_society_contact) then raise exception 'permission denied' using errcode = '42501'; end if;
+  if (new.is_verified is distinct from old.is_verified) then raise exception 'permission denied' using errcode = '42501'; end if;
+  if (new.is_archived is distinct from old.is_archived) then raise exception 'permission denied' using errcode = '42501'; end if;
+  if (new.submitted_by is distinct from old.submitted_by) then raise exception 'permission denied' using errcode = '42501'; end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_directory_contacts_block_privileged_self_edit on public.directory_contacts;
+create trigger trg_directory_contacts_block_privileged_self_edit
+  before insert or update on public.directory_contacts
+  for each row execute procedure public.directory_contacts_block_privileged_self_edit();
+
+alter table public.directory_contacts enable row level security;
+alter table public.directory_votes    enable row level security;
+
+drop policy if exists "Approved users can read contacts" on public.directory_contacts;
+create policy "Approved users can read contacts"
+  on public.directory_contacts for select to authenticated
+  using (
+    (is_archived = false and exists (select 1 from public.profiles where id = auth.uid() and is_approved = true))
+    or exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
+  );
+
+drop policy if exists "Approved users can submit contacts" on public.directory_contacts;
+create policy "Approved users can submit contacts"
+  on public.directory_contacts for insert to authenticated
+  with check (exists (select 1 from public.profiles where id = auth.uid() and is_approved = true));
+
+drop policy if exists "Submitter or admin can update contacts" on public.directory_contacts;
+create policy "Submitter or admin can update contacts"
+  on public.directory_contacts for update to authenticated
+  using (auth.uid() = submitted_by or exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'))
+  with check (auth.uid() = submitted_by or exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'));
+
+drop policy if exists "Admin can delete contacts" on public.directory_contacts;
+create policy "Admin can delete contacts"
+  on public.directory_contacts for delete to authenticated
+  using (exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'));
+
+drop policy if exists "Users see their own votes" on public.directory_votes;
+create policy "Users see their own votes"
+  on public.directory_votes for select to authenticated
+  using (auth.uid() = user_id or exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'));
+
+drop policy if exists "Users add their own votes" on public.directory_votes;
+create policy "Users add their own votes"
+  on public.directory_votes for insert to authenticated
+  with check (auth.uid() = user_id and exists (select 1 from public.profiles where id = auth.uid() and is_approved = true));
+
+drop policy if exists "Users remove their own votes" on public.directory_votes;
+create policy "Users remove their own votes"
+  on public.directory_votes for delete to authenticated
+  using (auth.uid() = user_id);
+
+-- ============================================================
+-- 2026-04-30 — Telegram bot integration
+-- (Mirror of supabase/migrations/20260430_telegram.sql)
+-- ============================================================
+
+create table if not exists public.telegram_links (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null unique references public.profiles(id) on delete cascade,
+  chat_id bigint not null,
+  username text,
+  first_name text,
+  last_name text,
+  is_active boolean not null default true,
+  linked_at timestamptz not null default now(),
+  last_seen_at timestamptz,
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_telegram_links_chat_id on public.telegram_links (chat_id);
+create index if not exists idx_telegram_links_active  on public.telegram_links (is_active) where is_active;
+
+-- One *active* link per Telegram chat. Soft-disabled rows are
+-- excluded from the constraint so historical "user blocked the bot"
+-- rows we keep for re-pair audit don't collide with fresh links.
+-- Mirrors supabase/migrations/20260504_telegram_links_unique_active_chat.sql.
+create unique index if not exists telegram_links_one_active_per_chat
+  on public.telegram_links (chat_id)
+  where is_active = true;
+
+create table if not exists public.telegram_pairings (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  code text not null unique,
+  expires_at timestamptz not null,
+  consumed_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_telegram_pairings_user on public.telegram_pairings (user_id);
+create index if not exists idx_telegram_pairings_unconsumed
+  on public.telegram_pairings (expires_at)
+  where consumed_at is null;
+
+create table if not exists public.telegram_notifications_sent (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  kind text not null,
+  ref_id text not null,
+  sent_at timestamptz not null default now(),
+  unique (kind, ref_id, user_id)
+);
+
+create index if not exists idx_telegram_notifications_sent_user
+  on public.telegram_notifications_sent (user_id, sent_at desc);
+
+create or replace function public.telegram_links_touch_updated_at()
+returns trigger language plpgsql as $func$
+begin
+  new.updated_at := now();
+  return new;
+end;
+$func$;
+
+drop trigger if exists trg_telegram_links_touch_updated_at on public.telegram_links;
+create trigger trg_telegram_links_touch_updated_at
+  before update on public.telegram_links
+  for each row execute procedure public.telegram_links_touch_updated_at();
+
+alter table public.telegram_links              enable row level security;
+alter table public.telegram_pairings           enable row level security;
+alter table public.telegram_notifications_sent enable row level security;
+
+drop policy if exists "Users can view their own telegram link" on public.telegram_links;
+create policy "Users can view their own telegram link"
+  on public.telegram_links for select to authenticated
+  using (auth.uid() = user_id);
+
+drop policy if exists "Admins can view all telegram links" on public.telegram_links;
+create policy "Admins can view all telegram links"
+  on public.telegram_links for select to authenticated
+  using (exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'));
+
+drop policy if exists "Users can view their own pending pairing" on public.telegram_pairings;
+create policy "Users can view their own pending pairing"
+  on public.telegram_pairings for select to authenticated
+  using (auth.uid() = user_id);
+
+create or replace function public.telegram_pairings_purge_stale()
+returns void language sql security definer set search_path = public as $func$
+  delete from public.telegram_pairings
+   where (consumed_at is not null and consumed_at < now() - interval '1 day')
+      or (consumed_at is null     and expires_at  < now() - interval '1 hour');
+$func$;
+
+-- ============================================================
+-- 2026-05-01 — Multi-channel notification dispatcher
+-- (Mirror of supabase/migrations/20260501_notifications.sql)
+-- ============================================================
+
+create table if not exists public.notification_events (
+  id uuid primary key default gen_random_uuid(),
+  kind text not null,
+  ref_id text not null,
+  audience_size int not null,
+  push_outcome     jsonb not null default '{}'::jsonb,
+  telegram_outcome jsonb not null default '{}'::jsonb,
+  error text,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_notification_events_kind_created
+  on public.notification_events (kind, created_at desc);
+create index if not exists idx_notification_events_ref
+  on public.notification_events (kind, ref_id);
+
+alter table public.notification_events enable row level security;
+
+drop policy if exists "Admins can view all notification events" on public.notification_events;
+create policy "Admins can view all notification events"
+  on public.notification_events for select to authenticated
+  using (exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'));
+
+create table if not exists public.notification_preferences (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  kind text not null,
+  channel text not null check (channel in ('push', 'telegram', 'email')),
+  muted boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (user_id, kind, channel)
+);
+
+create index if not exists idx_notification_prefs_user
+  on public.notification_preferences (user_id);
+
+alter table public.notification_preferences enable row level security;
+
+drop policy if exists "Users can view their own notification prefs"   on public.notification_preferences;
+drop policy if exists "Users can manage their own notification prefs" on public.notification_preferences;
+
+create policy "Users can view their own notification prefs"
+  on public.notification_preferences for select to authenticated
+  using (auth.uid() = user_id);
+
+create policy "Users can manage their own notification prefs"
+  on public.notification_preferences for all to authenticated
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+create or replace function public.notification_preferences_touch_updated_at()
+returns trigger language plpgsql as $func$
+begin
+  new.updated_at := now();
+  return new;
+end;
+$func$;
+
+drop trigger if exists trg_notification_prefs_touch on public.notification_preferences;
+create trigger trg_notification_prefs_touch
+  before update on public.notification_preferences
+  for each row execute procedure public.notification_preferences_touch_updated_at();
+
+-- ============================================================
+-- TELEGRAM PENDING ACTIONS (two-step reject from Telegram)
+-- See supabase/migrations/20260502_telegram_pending_actions.sql.
+-- ============================================================
+create table if not exists public.telegram_pending_actions (
+    chat_id      bigint primary key,
+    user_id      uuid not null references public.profiles(id) on delete cascade,
+    action       text   not null,
+    created_at   timestamptz not null default now(),
+    origin_chat_id    bigint,
+    origin_message_id bigint
+);
+
+create index if not exists telegram_pending_actions_user_idx
+    on public.telegram_pending_actions(user_id);
+
+create index if not exists telegram_pending_actions_created_idx
+    on public.telegram_pending_actions(created_at desc);
+
+alter table public.telegram_pending_actions enable row level security;
+
+comment on table public.telegram_pending_actions is
+    'Short-lived per-admin Telegram pending actions awaiting a typed reason. Service-role only.';
 
 -- ============================================================
 -- REFRESH POSTGREST SCHEMA CACHE

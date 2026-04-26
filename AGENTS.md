@@ -10,6 +10,16 @@ This project is on Next.js **16.2.4** with **Turbopack dev**. Several convention
 
 Mobile-first PWA for residents of the Aaditri Emerland community — announcements, events, facility bookings, gallery, broadcasts, profile, and an admin panel. Hosted on Vercel, backed by Supabase.
 
+## Specialized Agent Playbooks (Cross-Model)
+
+Use the shared role playbooks in `agents/` when a task is specifically about operations, testing, or review:
+
+- `agents/sre-agent.md`
+- `agents/testing-agent.md`
+- `agents/code-review-agent.md`
+
+For Cursor auto-discovery, equivalent wrappers are available in `.cursor/skills/`.
+
 ## Tech Stack (authoritative — check `package.json` for exact versions)
 
 - **Next.js `16.2.4`** (App Router, Turbopack)
@@ -115,6 +125,59 @@ Full schema and seed data live in `supabase/migrations/20260420_tickets_clubhous
 **New env var.** `CLUBHOUSE_PASS_SECRET` — required for `/api/clubhouse/passes` to mint signed tokens and `/api/admin/clubhouse/passes/validate` to verify them. Generate with `openssl rand -base64 32` and add to `.env.local` + Vercel project env. Forging a QR without this secret fails signature verification; even if a forgery slipped through, the validate endpoint always re-reads the canonical `clubhouse_passes` row before admitting.
 
 **New dependency.** `qrcode@^1.5.4` (+ `@types/qrcode` dev). Used only by `src/app/dashboard/clubhouse/passes/page.tsx` to render the data-URL QR in the resident's browser.
+
+### 7c. Multi-channel notification dispatcher + Telegram bot
+
+The notification system was rewritten in April 2026 to fan out every system notification through a single dispatcher that routes to **web push AND Telegram DMs**. The WhatsApp deep-link buttons in residents' UIs are unchanged — Telegram is purely additive.
+
+**Migrations to apply (in order)** on existing prod DBs:
+
+1. `supabase/migrations/20260430_telegram.sql` — `telegram_links`, `telegram_pairings`, `telegram_notifications_sent`.
+2. `supabase/migrations/20260501_notifications.sql` — `notification_events` (audit log), `notification_preferences` (scaffold for opt-out).
+3. `supabase/migrations/20260502_telegram_pending_actions.sql` — short-lived per-admin state for the two-step Telegram reject flow.
+4. `supabase/migrations/20260503_booking_update_trigger.sql` — BEFORE UPDATE trigger pinning resident-controlled booking columns (facility/date/time_slot/user_id/notes/created_at) and locking status transitions to `pending → cancelled`. Closes a gap where residents could edit a `pending` row past the `/api/bookings` subscription gate.
+5. `supabase/migrations/20260504_telegram_links_unique_active_chat.sql` — partial unique index on `telegram_links(chat_id) where is_active`. Prevents two distinct app accounts from binding to the same Telegram chat (which would mis-route DMs and break admin callback authorization).
+
+All five are appended to `supabase/schema.sql` so a fresh install doesn't need them separately.
+
+**Env vars (all server-side except where noted):**
+
+- `TELEGRAM_BOT_TOKEN` — secret from BotFather. Never commit.
+- `TELEGRAM_BOT_USERNAME` — without the `@` (e.g. `Aaditri_Emerald_Bot`). Used to build pairing deep-links from the resident-facing pair UI.
+- `TELEGRAM_WEBHOOK_SECRET` — strong random string we send in the `X-Telegram-Bot-Api-Secret-Token` header on `setWebhook` and verify on every inbound webhook hit. Without it the webhook returns 401 to everyone.
+- `TELEGRAM_WEBHOOK_URL` — public URL of the bot webhook (e.g. `https://aaditri-emerland.vercel.app/api/telegram/webhook`). Set the webhook by POSTing as an admin to `/api/telegram/init`.
+
+**Architecture (read this before adding any new notification kind):**
+
+- `src/lib/notify.ts` — the single dispatcher. Call sites do `await notify('event_published', eventId, payload).catch(() => {})`. The catch is intentional: notification failures must never break the originating action (booking insert, ticket comment, etc.).
+- `src/lib/notify-routing.ts` — the routing table. One entry per `kind` declares (a) the audience resolver (which user IDs receive it), (b) the per-channel renderer (push title/body/url + Telegram MarkdownV2 + optional inline buttons), (c) optional callback_data for admin Approve/Reject taps. **Every change to "who gets notified for X" lives here.** The dispatcher and channel modules are payload-agnostic.
+- `src/lib/push.ts` — web push channel (existing, unchanged).
+- `src/lib/telegram.ts` — Telegram channel: `sendMessage`, MarkdownV2 escaping, fan-out per chat, dedup ledger writes.
+- `src/lib/channels/telegram-actions.ts` — handles inbound Telegram `callback_query` (admin tapped Approve/Reject) and the two-step reject state machine.
+
+**Audience routing semantics (current contract):**
+
+- **Society-wide** (broadcasts, announcements, events, fund_created, fund_closed): every approved non-bot resident.
+- **Per-flat fan-out** (subscription_expiring/expired, event_reminder): every approved member sharing the same `flat_number`.
+- **Approval flows** (`registration_submitted`, `subscription_requested`, `booking_submitted`): all admins **plus** the requester themselves so they get an "in queue" echo.
+- **Per-user feedback** (`*_decided`, `direct_message_received`, `ticket_comment_added`, `ticket_status_changed`, `fund_contribution_*`): just the relevant resident (or just admins, for `phonebook_entry_reported`).
+
+**Telegram inline approvals + two-step reject.** Any admin paired with the bot can approve/reject registrations, bookings, and clubhouse subscription requests directly from a Telegram DM. Approve is one-tap. Reject is a two-step flow:
+
+1. Admin taps ❌ Reject. The webhook records a row in `telegram_pending_actions` (one per admin chat) describing what they're rejecting and replies "Reply with a reason for rejection."
+2. Admin sends a plain-text message in the same chat. The webhook checks `telegram_pending_actions` for that chat, treats the next message as the reason, finalises the rejection, and clears the row. Pending rows older than 10 minutes are treated as expired.
+
+The web Approve/Reject endpoints AND the Telegram callback runner go through the **same shared decision helpers**:
+
+- `src/lib/decisions/registrations.ts` → `approveRegistration` / `rejectRegistration`
+- `src/lib/decisions/subscriptions.ts` → `approveSubscription` / `rejectSubscription`
+- `src/lib/decisions/bookings.ts` → `approveBooking` / `rejectBooking`
+
+This is the architectural commitment: every approval path (web AND Telegram) writes the row, logs an `admin_audit_log` entry, and dispatches the appropriate `*_decided` notification. The web booking-approve route additionally sends a calendar-invite email with an ICS attachment — that's a side effect of the web path only and does not block parity with Telegram.
+
+**Adding a new notification kind:** add a payload type + an entry to `ROUTING` in `src/lib/notify-routing.ts`, then call `notify('your_kind', dedupKey, payload)` from the originating route. Don't add a new channel module unless you genuinely need a new transport.
+
+**Don't bypass the dispatcher.** Direct calls to `sendPushToUsers` / `sendPushToAllResidents` are deprecated for new code — use `notify()` so push and Telegram stay in sync. The ones that remain (rate-limit warnings, internal admin pings) are documented in their call site.
 
 ### 8. Windows + WSL warning
 The repo lives at `C:\work\aaditri-emerland-web`. **Never run `next dev` from WSL against `/mnt/c/...`** — it corrupts Turbopack's cache. If someone hits `Cannot find module '../chunks/ssr/[turbopack]_runtime.js'`, first run:

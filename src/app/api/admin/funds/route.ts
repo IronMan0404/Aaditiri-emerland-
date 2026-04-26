@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/fund-auth';
 import { rupeesToPaise } from '@/lib/money';
-import { sendPushToAllResidents } from '@/lib/push';
+import { notify } from '@/lib/notify';
 import { logAdminAction } from '@/lib/admin-audit';
 import type { FundRecurringPeriod, FundVisibility } from '@/types/funds';
 
@@ -135,13 +135,10 @@ export async function POST(req: Request) {
   });
 
   if (body.notify && data.visibility === 'all_residents') {
-    sendPushToAllResidents({
-      title: `New community fund: ${data.name}`,
-      body: data.suggested_per_flat
-        ? `Suggested ₹${(data.suggested_per_flat / 100).toLocaleString('en-IN')}/flat. Tap to contribute.`
-        : 'Tap to view details and contribute.',
-      url: `/dashboard/funds/${data.id}`,
-      tag: `fund-created-${data.id}`,
+    notify('fund_created', data.id, {
+      fundId: data.id,
+      name: data.name,
+      suggestedPerFlatPaise: data.suggested_per_flat ?? null,
     }).catch(() => {});
   }
 

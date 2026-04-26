@@ -4,6 +4,14 @@
 
 @AGENTS.md
 
+## Specialized Agent Playbooks
+
+When the task is role-specific, use:
+
+- `agents/sre-agent.md` for incident response and reliability work
+- `agents/testing-agent.md` for test planning and validation work
+- `agents/code-review-agent.md` for severity-first code review work
+
 ## Quick context for Claude
 
 - App: **Aaditri Emerland** — residential community PWA.

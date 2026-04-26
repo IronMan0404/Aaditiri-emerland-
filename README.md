@@ -113,6 +113,7 @@ docs/                       # NEW per-feature documentation
 ├── BOT_MESSAGES.md
 ├── VEHICLES.md
 ├── CALENDAR_INVITES.md
+├── AI_ASSISTANT.md         # NEW: free local Ollama/Llama community assistant
 ├── BREVO_EMAIL.md
 ├── MSG91_WHATSAPP.md
 ├── NEWS.md                 # NEW: news section architecture (9 endpoints, geolocation, security)
@@ -139,6 +140,7 @@ docs/                       # NEW per-feature documentation
 ### Optional integrations (graceful-degrade if not configured)
 - **Email** via [Brevo](./docs/BREVO_EMAIL.md) — sends `.ics` calendar invites when an admin creates an event or approves a booking. Free tier covers 300 emails/day.
 - **WhatsApp** via [MSG91](./docs/MSG91_WHATSAPP.md) — bot messages also go out as WhatsApp template messages. Per-resident opt-in.
+- **AI Assistant** via local [Ollama](https://ollama.com/) + Llama models — fully free local inference for booking help and activity/report summaries. See [AI_ASSISTANT.md](./docs/AI_ASSISTANT.md).
 
 ### Free third-party data sources used by the News section (no keys needed)
 - **[Open-Meteo](https://open-meteo.com/)** — weather forecast + air quality
@@ -173,6 +175,15 @@ NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
 ```
 
 The app reads `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` first and falls back to `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
+
+### Optional AI environment variables (local and free)
+
+```bash
+AI_OLLAMA_BASE_URL=http://127.0.0.1:11434
+AI_OLLAMA_MODEL=llama3.2:3b
+```
+
+Then run `ollama serve` and pull a model (for example `ollama pull llama3.2:3b`).
 
 ### Scripts
 | Script         | What it does                  |

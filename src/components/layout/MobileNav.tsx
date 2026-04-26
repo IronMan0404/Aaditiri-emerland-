@@ -25,9 +25,11 @@ const navItems = [
 // is active we want the More tab to highlight as well so the user knows where
 // they are in the IA.
 const moreRoutes = [
+  '/dashboard/assistant',
   '/dashboard/announcements',
   '/dashboard/messages',
   '/dashboard/community',
+  '/dashboard/phonebook',
   '/dashboard/clubhouse',
   '/dashboard/gallery',
   '/dashboard/issues',

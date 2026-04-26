@@ -172,9 +172,13 @@ export default function IssuesPage() {
       return;
     }
     setCommentBody('');
-    // Best-effort: ping the server so admins get a push. Failures are silent
-    // because the comment row itself is what matters.
-    fetch(`/api/issues/${activeIssue.id}/comment-notify`, { method: 'POST' }).catch(() => undefined);
+    // Best-effort: ping the server so admins get a push + Telegram DM.
+    // Failures are silent because the comment row itself is what matters.
+    fetch(`/api/issues/${activeIssue.id}/comment-notify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ preview: body }),
+    }).catch(() => undefined);
     fetchComments(activeIssue.id);
   }
 

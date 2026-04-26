@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/Input';
 import VehiclesEditor, { type VehicleDraft } from '@/components/ui/VehiclesEditor';
 import FamilyEditor, { type FamilyMemberDraft } from '@/components/ui/FamilyEditor';
 import PetsEditor, { type PetDraft } from '@/components/ui/PetsEditor';
+import TelegramConnect from '@/components/notifications/TelegramConnect';
 import { safeImageUrl } from '@/lib/safe-url';
 
 export default function ProfilePage() {
@@ -218,6 +219,10 @@ export default function ProfilePage() {
           >
             <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${whatsappOptIn ? 'translate-x-6' : 'translate-x-1'}`} />
           </button>
+        </div>
+
+        <div className="mt-4 pt-4 border-t border-gray-100">
+          <TelegramConnect />
         </div>
       </div>
 

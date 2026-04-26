@@ -97,14 +97,32 @@ export async function proxy(request: NextRequest) {
   }
 
   // Try the cookie cache first.
+  //
+  // We ONLY trust the cookie when it represents an "approved" outcome
+  // (admin or approved-resident). Caching the negative case ("not yet
+  // approved") would mean a freshly-approved user is stuck on
+  // /auth/pending for up to 30 minutes after the admin flips their
+  // is_approved flag — which is a real foot-gun and was reported in
+  // dev. Re-checking on every request when the cached state is
+  // "denied" is cheap (the user only sees one page during that window:
+  // /auth/pending or /auth/login) and makes the approval flow feel
+  // instant.
   let role: 'admin' | 'user' | null = null;
   let isApproved = false;
   const cached = readRoleCookie(request);
-  if (cached && cached.sub === userId) {
+  const trustCache =
+    cached !== null
+    && cached.sub === userId
+    && (cached.role === 'admin' || cached.approved === true);
+
+  if (trustCache && cached) {
     role = cached.role;
     isApproved = cached.approved;
   } else {
-    // Cache miss: hit the DB once and write the result back into a cookie.
+    // Cache miss OR stale-negative cache: hit the DB. The query runs
+    // under the user's session so RLS applies — but the SELECT policy
+    // on `profiles` allows any authenticated user to read, so this
+    // never fails for a properly-signed-in user.
     try {
       const { data: profile } = await supabase
         .from('profiles')
@@ -116,17 +134,28 @@ export async function proxy(request: NextRequest) {
     } catch {
       // Treat as non-admin, non-approved.
     }
-    supabaseResponse.cookies.set(
-      ROLE_COOKIE,
-      JSON.stringify({ sub: userId, role, approved: isApproved } satisfies RoleCacheValue),
-      {
-        httpOnly: true,
-        sameSite: 'lax',
-        secure: process.env.NODE_ENV === 'production',
-        path: '/',
-        maxAge: ROLE_COOKIE_MAX_AGE,
-      }
-    );
+
+    // Only persist the cookie when the result is something worth
+    // caching (the user is actually in). Persisting "denied" would
+    // re-introduce the staleness bug.
+    if (role === 'admin' || isApproved) {
+      supabaseResponse.cookies.set(
+        ROLE_COOKIE,
+        JSON.stringify({ sub: userId, role, approved: isApproved } satisfies RoleCacheValue),
+        {
+          httpOnly: true,
+          sameSite: 'lax',
+          secure: process.env.NODE_ENV === 'production',
+          path: '/',
+          maxAge: ROLE_COOKIE_MAX_AGE,
+        }
+      );
+    } else {
+      // Pro-actively delete any stale "denied" cookie that may be
+      // sitting around from a previous session, so the next request
+      // doesn't see it either.
+      supabaseResponse.cookies.delete(ROLE_COOKIE);
+    }
   }
 
   if (pathname.startsWith('/admin') && role !== 'admin') {

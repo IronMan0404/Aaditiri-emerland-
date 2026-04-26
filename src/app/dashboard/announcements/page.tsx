@@ -30,13 +30,32 @@ export default function AnnouncementsPage() {
     e.preventDefault();
     if (!form.title || !form.content) { toast.error('Title and content required'); return; }
     setSaving(true);
-    const { error } = await supabase.from('announcements').insert({ ...form, created_by: profile?.id });
+    const { data: inserted, error } = await supabase
+      .from('announcements')
+      .insert({ ...form, created_by: profile?.id })
+      .select('id')
+      .single();
     setSaving(false);
     if (error) { toast.error(error.message); return; }
     toast.success('Announcement posted!');
     setOpen(false);
     setForm({ title: '', content: '', is_pinned: false });
     fetch();
+
+    // Fire-and-forget multi-channel fan-out. The row is already
+    // visible in-app via the local fetch() above; push + Telegram
+    // are best-effort.
+    if (inserted?.id) {
+      try {
+        await globalThis.fetch('/api/push/announcement', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ announcementId: inserted.id }),
+        });
+      } catch {
+        // Channels are best-effort; in-app is authoritative.
+      }
+    }
   }
 
   async function handleDelete(id: string) {

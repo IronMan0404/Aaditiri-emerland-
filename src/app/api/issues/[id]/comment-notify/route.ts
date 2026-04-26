@@ -1,26 +1,34 @@
 import { NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
 import { createAdminSupabaseClient } from '@/lib/supabase-admin';
-import { sendPushToUsers } from '@/lib/push';
+import { notify } from '@/lib/notify';
 
-// Push fan-out for new issue comments. Called best-effort by the client
-// AFTER the comment row has been inserted via Supabase (RLS-protected).
+// Push + Telegram fan-out for new issue comments. Called best-effort
+// by the client AFTER the comment row has been inserted via Supabase
+// (RLS-protected).
 //
-// Why this is a separate route (not "POST /api/issues/:id/comment" that
-// inserts AND notifies in one shot):
-//   - The insert path is governed by RLS, so trying to do it via a server
-//     route would either need to call the user's session client (no benefit)
-//     or use the admin client (which would bypass the RLS access checks
-//     we just wrote). Letting the client insert keeps a single source of
-//     truth for permission rules.
-//   - This route only needs to verify the caller can SEE the issue, then
-//     uses the admin client for the cross-user push fan-out.
+// Why this is a separate route (not "POST /api/issues/:id/comment"
+// that inserts AND notifies in one shot):
+//   - The insert path is governed by RLS, so trying to do it via a
+//     server route would either need to call the user's session
+//     client (no benefit) or use the admin client (which would
+//     bypass the RLS access checks we just wrote). Letting the
+//     client insert keeps a single source of truth for permission
+//     rules.
+//   - This route only needs to verify the caller can SEE the issue,
+//     then delegates to the dispatcher for the cross-user fan-out.
+//
+// Migrated to notify('ticket_comment_added', ...) (April 2026).
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+interface CommentBody {
+  preview?: string;
+}
+
 export async function POST(
-  _req: Request,
+  req: Request,
   ctx: { params: Promise<{ id: string }> },
 ) {
   const { id } = await ctx.params;
@@ -31,8 +39,8 @@ export async function POST(
   const user = authRes?.user;
   if (!user) return NextResponse.json({ error: 'Not signed in' }, { status: 401 });
 
-  // Confirm the caller can see the issue (RLS does this for us \u2014 if the
-  // select returns null we silently 404).
+  // Confirm the caller can see the issue (RLS does this for us — if
+  // the select returns null we silently 404).
   const { data: issue } = await supabase
     .from('issues')
     .select('id, title, created_by, status')
@@ -40,8 +48,7 @@ export async function POST(
     .single();
   if (!issue) return NextResponse.json({ error: 'Issue not found' }, { status: 404 });
 
-  // Resolve recipients: every admin (so any on-duty admin gets a ping) plus
-  // the issue's creator if the caller is an admin replying to a resident.
+  // Resolve caller role so the renderer can pick the right copy.
   const admin = createAdminSupabaseClient();
   const { data: callerProfile } = await admin
     .from('profiles')
@@ -50,26 +57,34 @@ export async function POST(
     .single();
   const callerIsAdmin = callerProfile?.role === 'admin';
 
-  let recipientIds: string[] = [];
-  if (callerIsAdmin) {
-    if (issue.created_by !== user.id) recipientIds = [issue.created_by];
-  } else {
-    const { data: admins } = await admin.from('profiles').select('id').eq('role', 'admin').eq('is_bot', false);
-    recipientIds = (admins ?? []).map((r: { id: string }) => r.id).filter((rid) => rid !== user.id);
+  // Comment text preview (caller may pass it; otherwise we fall back
+  // to a generic line — the dispatcher won't fail either way).
+  let preview = '';
+  try {
+    const body = (await req.json().catch(() => ({}))) as CommentBody;
+    preview = (body.preview ?? '').trim();
+  } catch {
+    preview = '';
+  }
+  if (!preview) {
+    preview = callerIsAdmin
+      ? 'Open the ticket to read the reply.'
+      : `${callerProfile?.full_name ?? 'A resident'}: ${issue.title}`;
   }
 
-  if (recipientIds.length === 0) {
-    return NextResponse.json({ ok: true, skipped: 'no_recipients' });
-  }
-
-  const result = await sendPushToUsers(recipientIds, {
-    title: callerIsAdmin ? `Admin replied: ${issue.title}` : `New comment on issue`,
-    body: callerIsAdmin
-      ? 'Open the issue to read the reply.'
-      : `${callerProfile?.full_name ?? 'A resident'}: ${issue.title}`,
-    url: callerIsAdmin ? '/dashboard/issues' : '/admin/issues',
-    tag: `issue-comment:${issue.id}`,
+  const result = await notify('ticket_comment_added', issue.id, {
+    issueId: issue.id,
+    title: issue.title,
+    commentAuthorId: user.id,
+    commentAuthorIsAdmin: callerIsAdmin,
+    reporterId: issue.created_by,
+    preview,
   });
 
-  return NextResponse.json({ ok: true, push: result });
+  return NextResponse.json({
+    ok: true,
+    audienceSize: result.audienceSize,
+    push: result.pushOutcome,
+    telegram: result.telegramOutcome,
+  });
 }

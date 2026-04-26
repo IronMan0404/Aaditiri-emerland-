@@ -173,7 +173,11 @@ export default function AdminIssuesPage() {
     }
     setCommentBody('');
     if (!commentInternal) {
-      fetch(`/api/issues/${activeIssue.id}/comment-notify`, { method: 'POST' }).catch(() => undefined);
+      fetch(`/api/issues/${activeIssue.id}/comment-notify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ preview: body }),
+      }).catch(() => undefined);
     }
     fetchComments(activeIssue.id);
   }

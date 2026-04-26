@@ -1,12 +1,15 @@
 import { NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
-import { sendPushToUsers } from '@/lib/push';
+import { notify } from '@/lib/notify';
 import type { IssueStatus } from '@/types';
 
-// Best-effort push fan-out triggered AFTER an admin transitions an issue's
-// status (the actual status change happens via Supabase update, gated by
-// RLS). We only push for the user-visible transitions ('resolved' and
-// 'closed') so residents aren't spammed with every internal hand-off.
+// Best-effort push + Telegram fan-out triggered AFTER an admin
+// transitions an issue's status (the actual status change happens
+// via Supabase update, gated by RLS). We only push for the
+// user-visible transitions ('resolved' and 'closed') so residents
+// aren't spammed with every internal hand-off.
+//
+// Migrated to notify('ticket_status_changed', ...) (April 2026).
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -45,12 +48,18 @@ export async function POST(
     return NextResponse.json({ ok: true, skipped: 'self_action' });
   }
 
-  const result = await sendPushToUsers([issue.created_by], {
-    title: body.status === 'resolved' ? 'Your issue is resolved' : 'Your issue is closed',
-    body: issue.title,
-    url: '/dashboard/issues',
-    tag: `issue-status:${issue.id}`,
+  const result = await notify('ticket_status_changed', issue.id, {
+    issueId: issue.id,
+    title: issue.title,
+    reporterId: issue.created_by,
+    actorId: user.id,
+    newStatus: body.status,
   });
 
-  return NextResponse.json({ ok: true, push: result });
+  return NextResponse.json({
+    ok: true,
+    audienceSize: result.audienceSize,
+    push: result.pushOutcome,
+    telegram: result.telegramOutcome,
+  });
 }

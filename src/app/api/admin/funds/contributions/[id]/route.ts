@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/fund-auth';
-import { sendPushToUsers } from '@/lib/push';
+import { notify } from '@/lib/notify';
 import { logAdminAction } from '@/lib/admin-audit';
 
 interface ActionBody {
@@ -54,13 +54,12 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     });
 
     if (existing.resident_id) {
-      sendPushToUsers([existing.resident_id], {
-        title: 'Contribution verified ✓',
-        body: existing.is_in_kind
-          ? `Thank you for your in-kind contribution!`
-          : `Thank you for ₹${(existing.amount / 100).toLocaleString('en-IN')}.`,
-        url: `/dashboard/funds/${existing.fund_id}`,
-        tag: `contribution-verified-${id}`,
+      notify('fund_contribution_verified', id, {
+        contributionId: id,
+        fundId: existing.fund_id,
+        residentId: existing.resident_id,
+        isInKind: existing.is_in_kind,
+        amountPaise: existing.amount ?? null,
       }).catch(() => {});
     }
     return NextResponse.json({ contribution: data });
@@ -97,11 +96,11 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     });
 
     if (existing.resident_id) {
-      sendPushToUsers([existing.resident_id], {
-        title: 'Contribution needs attention',
-        body: `Your reported contribution was rejected: ${reason.slice(0, 100)}`,
-        url: `/dashboard/funds/${existing.fund_id}`,
-        tag: `contribution-rejected-${id}`,
+      notify('fund_contribution_rejected', id, {
+        contributionId: id,
+        fundId: existing.fund_id,
+        residentId: existing.resident_id,
+        reason,
       }).catch(() => {});
     }
     return NextResponse.json({ contribution: data });

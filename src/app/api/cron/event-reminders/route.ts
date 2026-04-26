@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient } from '@/lib/supabase-admin';
-import { sendPushToUsers, isPushConfigured } from '@/lib/push';
+import { isPushConfigured } from '@/lib/push';
+import { notify } from '@/lib/notify';
 
 // Daily housekeeping + reminders cron.
 //
@@ -18,25 +19,30 @@ import { sendPushToUsers, isPushConfigured } from '@/lib/push';
 //
 // Each invocation runs three independent passes:
 //
-//   1. Event reminders \u2014 finds events scheduled for the local "tomorrow"
+//   1. Event reminders — finds events scheduled for the local "tomorrow"
 //      (next 24-48h window), loads everyone who RSVP'd "going" or "maybe",
 //      skips users we've already sent a reminder to (event_reminders_sent
-//      ledger), then sends a push and records a row.
+//      ledger), then dispatches the notification (push + Telegram) and
+//      records a row.
 //
-//   2. Clubhouse pass expiry \u2014 flips active passes whose valid_until is in
+//   2. Clubhouse pass expiry — flips active passes whose valid_until is in
 //      the past to status='expired'. The DB doesn't transition these on its
 //      own; a daily sweep is good enough since the validate API also
 //      computes the effective state on-the-fly.
 //
-//   3. Clubhouse subscription transitions \u2014 flips active subscriptions
+//   3. Clubhouse subscription transitions — flips active subscriptions
 //      whose end_date is yesterday-or-earlier to 'expired', flips ones
-//      ending in the next 7 days to 'expiring', and pushes a one-off notice
-//      to each affected primary user. The clubhouse_subscription_notices_sent
-//      ledger keeps the cron idempotent across runs.
+//      ending in the next 7 days to 'expiring', and dispatches a one-off
+//      notice to each affected primary user. The
+//      clubhouse_subscription_notices_sent ledger keeps the cron
+//      idempotent across runs.
 //
-// All three failures are logged but don't abort sibling passes \u2014 a
+// All three failures are logged but don't abort sibling passes — a
 // dropped push provider shouldn't stop us from updating subscription
 // statuses.
+//
+// All notifications go through src/lib/notify.ts so push + Telegram are
+// kept in sync.
 
 export const dynamic = 'force-dynamic';
 
@@ -81,12 +87,17 @@ export async function GET(request: Request) {
   const pushReady = isPushConfigured();
 
   const [events, passes, subs] = await Promise.all([
-    pushReady ? runEventReminders(admin) : Promise.resolve({ skipped: 'push_not_configured' }),
+    runEventReminders(admin),
     runPassExpiry(admin),
-    runSubscriptionTransitions(admin, pushReady),
+    runSubscriptionTransitions(admin),
   ]);
 
-  return NextResponse.json({ events, passes, subscriptions: subs });
+  return NextResponse.json({
+    events,
+    passes,
+    subscriptions: subs,
+    push_ready: pushReady,
+  });
 }
 
 async function runEventReminders(admin: AdminClient) {
@@ -105,7 +116,7 @@ async function runEventReminders(admin: AdminClient) {
   if (eventsErr) return { error: eventsErr.message };
 
   const eventList = (events ?? []) as EventRow[];
-  if (eventList.length === 0) return { events: 0, sent: 0 };
+  if (eventList.length === 0) return { events: 0, dispatched: 0 };
   const eventIds = eventList.map((e) => e.id);
 
   const { data: rsvps } = await admin
@@ -123,8 +134,7 @@ async function runEventReminders(admin: AdminClient) {
     ((alreadySent ?? []) as ReminderLedgerRow[]).map((r) => `${r.event_id}:${r.user_id}`),
   );
 
-  let totalSent = 0;
-  let totalAttempted = 0;
+  let dispatched = 0;
 
   for (const ev of eventList) {
     const recipients = rsvpList
@@ -132,24 +142,34 @@ async function runEventReminders(admin: AdminClient) {
       .map((r) => r.user_id);
     if (recipients.length === 0) continue;
 
-    const result = await sendPushToUsers(recipients, {
-      title: `Tomorrow: ${ev.title}`,
-      body: `${ev.time} at ${ev.location}`,
-      url: '/dashboard/events',
-      tag: `event-reminder:${ev.id}`,
-    });
-    totalSent += result.sent;
-    totalAttempted += result.attempted;
+    // event_reminder is a per-user kind (audience resolver returns
+    // [userId]) so we dispatch one notification per recipient.
+    // Dispatcher's telegram_notifications_sent ledger gives us
+    // per-user dedup on top of the application-level
+    // event_reminders_sent ledger.
+    for (const uid of recipients) {
+      try {
+        await notify('event_reminder', `${ev.id}:${uid}`, {
+          eventId: ev.id,
+          userId: uid,
+          title: ev.title,
+          whenLabel: `${ev.time} at ${ev.location}`,
+        });
+        dispatched += 1;
+      } catch (err) {
+        console.error('[cron] event reminder failed', ev.id, uid, err);
+      }
+    }
 
-    // Mark every recipient as "reminded" \u2014 even ones whose push failed \u2014
-    // so a transient delivery error doesn't cause us to keep re-trying
-    // until the user receives 24 of the same notification.
+    // Mark every recipient as "reminded" — even ones whose dispatch
+    // failed — so a transient delivery error doesn't cause us to keep
+    // re-trying until the user receives 24 of the same notification.
     await admin
       .from('event_reminders_sent')
       .upsert(recipients.map((uid) => ({ event_id: ev.id, user_id: uid })));
   }
 
-  return { events: eventList.length, attempted: totalAttempted, sent: totalSent };
+  return { events: eventList.length, dispatched };
 }
 
 async function runPassExpiry(admin: AdminClient) {
@@ -168,19 +188,22 @@ interface SubscriptionRow {
   id: string;
   flat_number: string;
   primary_user_id: string;
-  end_date: string; // ISO date
-  // Includes request-flow statuses, though the cron only ever
-  // touches active/expiring/expired rows (filtered explicitly
-  // below). pending_approval and rejected rows are inert here.
+  end_date: string;
   status: 'pending_approval' | 'active' | 'expiring' | 'expired' | 'cancelled' | 'rejected';
 }
 
-async function runSubscriptionTransitions(admin: AdminClient, pushReady: boolean) {
+function daysBetween(fromIso: string, toIso: string): number {
+  const a = new Date(fromIso + 'T00:00:00Z').getTime();
+  const b = new Date(toIso + 'T00:00:00Z').getTime();
+  return Math.max(0, Math.round((a - b) / (24 * 60 * 60 * 1000)));
+}
+
+async function runSubscriptionTransitions(admin: AdminClient) {
   const today = new Date();
   const todayIso = today.toISOString().slice(0, 10);
   const sevenDaysIso = new Date(today.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
-  // 1. Active \u2192 expired (end_date strictly before today).
+  // 1. Active → expired (end_date strictly before today).
   const { data: justExpired } = await admin
     .from('clubhouse_subscriptions')
     .update({ status: 'expired' })
@@ -188,7 +211,7 @@ async function runSubscriptionTransitions(admin: AdminClient, pushReady: boolean
     .in('status', ['active', 'expiring'])
     .select('id, flat_number, primary_user_id, end_date, status') as { data: SubscriptionRow[] | null };
 
-  // 2. Active \u2192 expiring (end_date within next 7 days, exclusive of today
+  // 2. Active → expiring (end_date within next 7 days, exclusive of today
   // because a sub ending *today* is still active until midnight).
   const { data: nowExpiring } = await admin
     .from('clubhouse_subscriptions')
@@ -198,66 +221,68 @@ async function runSubscriptionTransitions(admin: AdminClient, pushReady: boolean
     .eq('status', 'active')
     .select('id, flat_number, primary_user_id, end_date, status') as { data: SubscriptionRow[] | null };
 
-  let pushedExpiring = 0;
-  let pushedExpired = 0;
+  let dispatchedExpiring = 0;
+  let dispatchedExpired = 0;
 
-  if (pushReady) {
-    const expiringList = nowExpiring ?? [];
-    if (expiringList.length > 0) {
-      const ids = expiringList.map((s) => s.id);
-      const { data: alreadyNotified } = await admin
-        .from('clubhouse_subscription_notices_sent')
-        .select('subscription_id, notice_kind')
-        .in('subscription_id', ids)
-        .eq('notice_kind', 'expiring');
-      const sentSet = new Set((alreadyNotified ?? []).map((r) => r.subscription_id));
+  const expiringList = nowExpiring ?? [];
+  if (expiringList.length > 0) {
+    const ids = expiringList.map((s) => s.id);
+    const { data: alreadyNotified } = await admin
+      .from('clubhouse_subscription_notices_sent')
+      .select('subscription_id, notice_kind')
+      .in('subscription_id', ids)
+      .eq('notice_kind', 'expiring');
+    const sentSet = new Set((alreadyNotified ?? []).map((r) => r.subscription_id));
 
-      for (const sub of expiringList) {
-        if (sentSet.has(sub.id)) continue;
-        await sendPushToUsers([sub.primary_user_id], {
-          title: 'Clubhouse subscription expiring soon',
-          body: `Your subscription for flat ${sub.flat_number} ends ${sub.end_date}. Renew to keep your facilities.`,
-          url: '/dashboard/clubhouse',
-          tag: `clubhouse-expiring:${sub.id}`,
+    for (const sub of expiringList) {
+      if (sentSet.has(sub.id)) continue;
+      try {
+        await notify('subscription_expiring', sub.id, {
+          subscriptionId: sub.id,
+          flatNumber: sub.flat_number,
+          daysLeft: daysBetween(sub.end_date, todayIso),
         });
-        await admin
-          .from('clubhouse_subscription_notices_sent')
-          .upsert({ subscription_id: sub.id, notice_kind: 'expiring' });
-        pushedExpiring += 1;
+        dispatchedExpiring += 1;
+      } catch (err) {
+        console.error('[cron] subscription expiring notify failed', sub.id, err);
       }
+      await admin
+        .from('clubhouse_subscription_notices_sent')
+        .upsert({ subscription_id: sub.id, notice_kind: 'expiring' });
     }
+  }
 
-    const expiredList = justExpired ?? [];
-    if (expiredList.length > 0) {
-      const ids = expiredList.map((s) => s.id);
-      const { data: alreadyNotified } = await admin
-        .from('clubhouse_subscription_notices_sent')
-        .select('subscription_id, notice_kind')
-        .in('subscription_id', ids)
-        .eq('notice_kind', 'expired');
-      const sentSet = new Set((alreadyNotified ?? []).map((r) => r.subscription_id));
+  const expiredList = justExpired ?? [];
+  if (expiredList.length > 0) {
+    const ids = expiredList.map((s) => s.id);
+    const { data: alreadyNotified } = await admin
+      .from('clubhouse_subscription_notices_sent')
+      .select('subscription_id, notice_kind')
+      .in('subscription_id', ids)
+      .eq('notice_kind', 'expired');
+    const sentSet = new Set((alreadyNotified ?? []).map((r) => r.subscription_id));
 
-      for (const sub of expiredList) {
-        if (sentSet.has(sub.id)) continue;
-        await sendPushToUsers([sub.primary_user_id], {
-          title: 'Clubhouse subscription expired',
-          body: `Your subscription for flat ${sub.flat_number} has expired. Contact admin to renew.`,
-          url: '/dashboard/clubhouse',
-          tag: `clubhouse-expired:${sub.id}`,
+    for (const sub of expiredList) {
+      if (sentSet.has(sub.id)) continue;
+      try {
+        await notify('subscription_expired', sub.id, {
+          subscriptionId: sub.id,
+          flatNumber: sub.flat_number,
         });
-        await admin
-          .from('clubhouse_subscription_notices_sent')
-          .upsert({ subscription_id: sub.id, notice_kind: 'expired' });
-        pushedExpired += 1;
+        dispatchedExpired += 1;
+      } catch (err) {
+        console.error('[cron] subscription expired notify failed', sub.id, err);
       }
+      await admin
+        .from('clubhouse_subscription_notices_sent')
+        .upsert({ subscription_id: sub.id, notice_kind: 'expired' });
     }
   }
 
   return {
     expired: justExpired?.length ?? 0,
     expiring: nowExpiring?.length ?? 0,
-    pushed_expiring: pushedExpiring,
-    pushed_expired: pushedExpired,
-    push_skipped: !pushReady,
+    dispatched_expiring: dispatchedExpiring,
+    dispatched_expired: dispatchedExpired,
   };
 }

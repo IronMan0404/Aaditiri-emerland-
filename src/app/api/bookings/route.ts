@@ -1,16 +1,25 @@
 import { NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
+import { createAdminSupabaseClient, isAdminClientConfigured } from '@/lib/supabase-admin';
+import { notify } from '@/lib/notify';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 // Booking-creation endpoint that enforces the clubhouse subscription
-// requirement server-side. The client (src/app/dashboard/bookings/page.tsx)
-// could insert directly via the supabase-js client \u2014 RLS would still let
-// it through \u2014 but we need to *block* unsubscribed flats from booking
-// subscription-only facilities (gym/pool/yoga). RLS can't easily express
-// "facility lookup + flat lookup + tier membership" in a single policy, so
-// we centralise the check here.
+// requirement server-side. RLS on `public.bookings` (see migration
+// 20260428_security_hardening.sql) now blocks resident-direct INSERTs:
+// only admins can insert via the regular session client. Residents MUST
+// route through this endpoint, which:
+//   1. authenticates the caller from the session cookie,
+//   2. runs the subscription / facility-eligibility gate that RLS can't
+//      easily express in a single policy,
+//   3. performs the actual write via the service-role admin client so
+//      the RLS lockdown doesn't reject our own legitimate insert.
+// The service-role client is invoked ONLY for the final insert; every
+// authorisation decision is still made against the resident's session
+// so we can never write a row on behalf of a different user than the
+// one holding the cookie.
 
 interface CreateBookingPayload {
   facility_id?: string;
@@ -21,6 +30,20 @@ interface CreateBookingPayload {
 }
 
 export async function POST(req: Request) {
+  // Service-role is required for the final insert because RLS now
+  // blocks resident-direct INSERTs on `bookings`. We fail fast with a
+  // clear message if the env var is missing, matching the registration
+  // route's contract.
+  if (!isAdminClientConfigured()) {
+    return NextResponse.json(
+      {
+        error:
+          'Server is missing SUPABASE_SERVICE_ROLE_KEY. Bookings cannot be created until the admin sets this env var.',
+      },
+      { status: 500 },
+    );
+  }
+
   const supabase = await createServerSupabaseClient();
   const { data: authRes } = await supabase.auth.getUser();
   const user = authRes?.user;
@@ -89,10 +112,15 @@ export async function POST(req: Request) {
     }
   }
 
-  // Insert. We keep the legacy `facility` column populated with the display
-  // name so existing list views (which key off bookings.facility) keep
-  // working without a coordinated client migration.
-  const { data: inserted, error } = await supabase
+  // Insert via the service-role client. RLS would otherwise reject this
+  // (residents are blocked from direct INSERTs as of the security
+  // hardening migration). We keep the legacy `facility` column populated
+  // with the display name so existing list views keep working without a
+  // coordinated client migration. user_id is taken from the verified
+  // session above — never from the request body — so a malicious payload
+  // can't book on behalf of someone else.
+  const admin = createAdminSupabaseClient();
+  const { data: inserted, error } = await admin
     .from('bookings')
     .insert({
       user_id: user.id,
@@ -105,6 +133,15 @@ export async function POST(req: Request) {
     .select('id')
     .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Best-effort fan-out: ping admins (with Telegram inline buttons)
+  // and echo the requester. Failures don't fail the booking.
+  notify('booking_submitted', inserted.id, {
+    bookingId: inserted.id,
+    requesterId: user.id,
+    facilityName: facility.name,
+    whenLabel: `${body.date} · ${body.time_slot}`,
+  }).catch(() => {});
 
   return NextResponse.json({ ok: true, id: inserted.id });
 }

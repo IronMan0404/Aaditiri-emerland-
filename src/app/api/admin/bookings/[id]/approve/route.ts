@@ -2,7 +2,12 @@ import { NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
 import { sendEmail, isEmailConfigured } from '@/lib/email';
 import { buildIcs, googleCalendarUrl, outlookCalendarUrl, parseTimeRange, istDateToUtc } from '@/lib/ics';
-import { logAdminAction } from '@/lib/admin-audit';
+import { approveBooking } from '@/lib/decisions/bookings';
+
+// Web admin route: flips a booking to 'approved' via the shared
+// decision helper (DB write + audit + notify) and additionally
+// sends a calendar-invite email with an ICS attachment. The
+// Telegram callback path uses the same helper but skips the email.
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -28,6 +33,8 @@ export async function POST(
     return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
   }
 
+  // Re-fetch the booking with the resident's profile join so we can
+  // build the email after the helper has applied the status change.
   const { data: booking, error: bookingErr } = await supabase
     .from('bookings')
     .select('id, user_id, facility, date, time_slot, notes, status, profiles(full_name, email)')
@@ -37,23 +44,17 @@ export async function POST(
     return NextResponse.json({ error: `Booking not found: ${bookingErr?.message ?? 'missing'}` }, { status: 404 });
   }
 
-  // Flip status to approved first — even if email fails, the booking is approved.
-  const { error: updateErr } = await supabase.from('bookings').update({ status: 'approved' }).eq('id', id);
-  if (updateErr) {
-    return NextResponse.json({ error: `Couldn't approve: ${updateErr.message}` }, { status: 500 });
-  }
-
-  await logAdminAction({
-    actor: { id: me.id, email: me.email, name: me.full_name },
-    action: 'update',
-    targetType: 'booking',
-    targetId: booking.id,
-    targetLabel: `${booking.facility} on ${booking.date} ${booking.time_slot}`,
-    reason: 'Approved booking',
-    before: { status: booking.status },
-    after: { status: 'approved' },
+  const decision = await approveBooking(id, {
+    id: me.id,
+    fullName: me.full_name,
+    email: me.email,
+    via: 'web',
     request: req,
   });
+  if (!decision.ok) {
+    const status = decision.label.startsWith('Cannot') ? 409 : 400;
+    return NextResponse.json({ error: decision.label }, { status });
+  }
 
   if (!isEmailConfigured()) {
     return NextResponse.json({ ok: true, approved: true, email: { sent: false, reason: 'provider_disabled' } });

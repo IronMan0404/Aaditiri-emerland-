@@ -164,8 +164,16 @@ export default function AdminUsersPage() {
   const blockSelfDemote = isSelfDemote && !confirmSelfDemote;
 
   async function approveUser(user: Profile) {
-    const { error } = await supabase.from('profiles').update({ is_approved: true }).eq('id', user.id);
-    if (error) { toast.error(error.message); return; }
+    // Goes through /api/admin/users/:id/approve so the audit log is
+    // written and notify('registration_decided') fans out to push +
+    // Telegram. The same code path runs when an admin taps Approve
+    // from a Telegram DM.
+    const res = await fetch(`/api/admin/users/${user.id}/approve`, { method: 'POST' });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      toast.error(json.error ?? 'Approval failed');
+      return;
+    }
     toast.success(`${user.full_name} approved!`);
     fetchUsers();
   }

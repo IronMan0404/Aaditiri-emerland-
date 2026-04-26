@@ -1,0 +1,13 @@
+---
+alwaysApply: true
+---
+# Agent Playbooks
+
+When the user asks for role-specific support, load the matching playbook:
+
+- `agents/sre-agent.md` - incident response, operations, and reliability.
+- `agents/testing-agent.md` - risk-based test strategy and validation.
+- `agents/code-review-agent.md` - severity-first review focused on bugs and risk.
+
+Cursor skill wrappers are also available under `.cursor/skills/`.
+

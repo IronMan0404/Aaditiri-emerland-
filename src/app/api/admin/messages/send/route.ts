@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
 import { isWhatsAppConfigured, sendWhatsAppTemplate } from '@/lib/msg91';
+import { notify } from '@/lib/notify';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -135,6 +136,33 @@ export async function POST(req: Request) {
 
     await Promise.all(Array.from({ length: Math.min(CONCURRENCY, recipients.length) }, () => worker()));
   }
+
+  // Push + Telegram DM each recipient with the same message body so
+  // residents who haven't opted into WhatsApp still receive it. The
+  // dispatcher's per-user dedup ledger keeps a single row per
+  // (kind, dedup-key, user) so retries are safe.
+  //
+  // We `await Promise.allSettled` rather than fire-and-forget because
+  // the previous fire-and-forget pattern was vulnerable to Vercel's
+  // serverless function lifecycle: when the response flushes, any
+  // promise that hasn't settled yet may be cancelled before the push
+  // / Telegram fetches resolve, silently dropping notifications for
+  // some recipients. Awaiting here costs the admin a few hundred ms
+  // on the request but guarantees delivery completion.
+  //
+  // TODO(scaling): once recipients > ~200 the request budget gets
+  // tight. Migrate to Vercel's `waitUntil()` (next/after) when this
+  // fan-out grows, or move the dispatch to a queue (Inngest, QStash,
+  // Supabase pg_cron). Until then, awaiting is the correct trade-off.
+  await Promise.allSettled(
+    recipients.map((recipient) =>
+      notify('direct_message_received', `${messageId}:${recipient.id}`, {
+        messageId,
+        recipientId: recipient.id,
+        preview: message,
+      }),
+    ),
+  );
 
   return NextResponse.json({
     ok: true,

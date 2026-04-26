@@ -286,6 +286,73 @@ export interface ClubhouseSubscription {
   primary_user?: { full_name: string; email: string; phone?: string | null };
 }
 
+// ============================================================
+// Directory / phone book
+// ============================================================
+
+export type DirectoryCategory =
+  | 'plumbing'
+  | 'electrical'
+  | 'carpentry'
+  | 'painting'
+  | 'pest_control'
+  | 'lift_amc'
+  | 'maid'
+  | 'cook'
+  | 'nanny'
+  | 'driver'
+  | 'milkman'
+  | 'newspaper'
+  | 'gas_cylinder'
+  | 'laundry'
+  | 'tailor'
+  | 'cab_auto'
+  | 'doctor'
+  | 'hospital'
+  | 'pharmacy'
+  | 'police'
+  | 'ambulance'
+  | 'fire'
+  | 'hardware'
+  | 'grocery'
+  | 'rwa_official'
+  | 'society_office'
+  | 'security_agency'
+  | 'other';
+
+export interface DirectoryContact {
+  id: string;
+  name: string;
+  category: DirectoryCategory;
+  phone: string;
+  alt_phone: string | null;
+  whatsapp: string | null;
+  notes: string | null;
+  area_served: string | null;
+  hourly_rate: number | null;
+  is_society_contact: boolean;
+  is_verified: boolean;
+  is_archived: boolean;
+  submitted_by: string | null;
+  vote_count: number;
+  report_count: number;
+  created_at: string;
+  updated_at: string;
+  // Optional joined data — only populated when the query selects the
+  // relationship via supabase-js's nested select.
+  profiles?: { full_name: string; flat_number?: string | null } | null;
+}
+
+export type DirectoryVoteKind = 'helpful' | 'reported';
+
+export interface DirectoryVote {
+  id: string;
+  contact_id: string;
+  user_id: string;
+  kind: DirectoryVoteKind;
+  created_at: string;
+}
+
 export type ClubhousePassStatus = 'active' | 'used' | 'expired' | 'revoked';
 
 export interface ClubhousePass {
@@ -306,3 +373,37 @@ export interface ClubhousePass {
   clubhouse_facilities?: Pick<ClubhouseFacility, 'id' | 'slug' | 'name'>;
   profiles?: { full_name: string; flat_number?: string | null };
 }
+
+// ============================================================
+// Telegram bot integration
+// (See supabase/migrations/20260430_telegram.sql)
+// ============================================================
+
+export interface TelegramLink {
+  id: string;
+  user_id: string;
+  chat_id: number;
+  username: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  is_active: boolean;
+  linked_at: string;
+  last_seen_at: string | null;
+  updated_at: string;
+}
+
+export interface TelegramPairing {
+  id: string;
+  user_id: string;
+  code: string;
+  expires_at: string;
+  consumed_at: string | null;
+  created_at: string;
+}
+
+// The dedup ledger (telegram_notifications_sent) is keyed by a
+// free-form `kind` string. The authoritative list of kinds lives
+// in src/lib/notify-routing.ts as `NotificationKind`. Importing
+// it from there into client code would pull in server-only
+// modules, so we don't re-export it here \u2014 just document the
+// intent.

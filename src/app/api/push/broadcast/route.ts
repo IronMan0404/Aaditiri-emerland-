@@ -1,17 +1,22 @@
 import { NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
-import { sendPushToAllResidents } from '@/lib/push';
+import { notify } from '@/lib/notify';
 
 interface BroadcastPushBody {
   broadcastId?: string;
 }
 
-// Triggered by an admin right after they insert a broadcast row from the
-// browser. We could move the broadcast insert here too, but doing it this
-// way keeps the optimistic UX (the row appears instantly) and makes the
-// push fan-out a fire-and-forget step that the user doesn't have to wait on.
+// Triggered by an admin right after they insert a broadcast row from
+// the browser. The broadcast row is the in-app surface; this endpoint
+// fans the same content out over web push and Telegram via the
+// dispatcher.
 //
-// Authorisation: must be an admin profile. Anyone else gets 403.
+// Migrated to `notify('broadcast_sent', ...)` (April 2026). The
+// response shape stays backwards-compatible with the previous
+// sendPushToAllResidents result so the broadcasts page UI keeps
+// working unchanged: { sent, attempted, failed } at the top level
+// reflect push, and a parallel `telegram` block reports the second
+// channel.
 export async function POST(request: Request) {
   const supabase = await createServerSupabaseClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -38,20 +43,28 @@ export async function POST(request: Request) {
 
   const { data: bc, error } = await supabase
     .from('broadcasts')
-    .select('id, title, message')
+    .select('id, title, message, created_by')
     .eq('id', body.broadcastId)
     .single();
   if (error || !bc) {
     return NextResponse.json({ error: 'Broadcast not found' }, { status: 404 });
   }
 
-  const result = await sendPushToAllResidents({
+  const result = await notify('broadcast_sent', bc.id, {
+    broadcastId: bc.id,
     title: bc.title,
-    // Push notification bodies should stay short; longer content lives in-app.
-    body: bc.message.length > 140 ? `${bc.message.slice(0, 137)}…` : bc.message,
-    url: '/dashboard/broadcasts',
-    tag: `broadcast:${bc.id}`,
+    body: bc.message,
+    authoredById: bc.created_by ?? null,
   });
 
-  return NextResponse.json(result);
+  return NextResponse.json({
+    // Back-compat surface for src/app/dashboard/broadcasts/page.tsx.
+    attempted: result.pushOutcome.attempted,
+    sent: result.pushOutcome.sent,
+    failed: result.pushOutcome.failed,
+    skipped: result.pushOutcome.skipped,
+    // New: Telegram + audience metadata.
+    audienceSize: result.audienceSize,
+    telegram: result.telegramOutcome,
+  });
 }

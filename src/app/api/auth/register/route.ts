@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient, isAdminClientConfigured } from '@/lib/supabase-admin';
 import { sendEmail, isEmailConfigured } from '@/lib/email';
+import { consume, getClientIp } from '@/lib/rate-limit';
+import { notify } from '@/lib/notify';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -52,7 +54,39 @@ const FAMILY_RELATIONS = new Set(['spouse', 'son', 'daughter', 'parent', 'siblin
 const GENDERS = new Set(['male', 'female', 'other']);
 const PET_SPECIES = new Set(['dog', 'cat', 'bird', 'other']);
 
+// Per-IP and per-email caps. Tuned for a residential community of a few
+// hundred flats — a legitimate user almost never needs more than one
+// successful registration per email, ever, so the per-email cap is the
+// sharper of the two. Both are best-effort (in-process counters); see
+// src/lib/rate-limit.ts for the trade-offs.
+const IP_LIMIT = 5;                  // 5 attempts per IP …
+const IP_WINDOW_MS = 15 * 60 * 1000; // … per 15 minutes
+const EMAIL_LIMIT = 3;               // 3 attempts per email …
+const EMAIL_WINDOW_MS = 60 * 60 * 1000; // … per hour
+
+function tooManyRequests(retryAfterMs: number) {
+  const retryAfterSeconds = Math.max(1, Math.ceil(retryAfterMs / 1000));
+  return NextResponse.json(
+    {
+      error:
+        'Too many registration attempts. Please wait a few minutes and try again.',
+    },
+    {
+      status: 429,
+      headers: { 'Retry-After': String(retryAfterSeconds) },
+    },
+  );
+}
+
 export async function POST(req: Request) {
+  // Stage 1: per-IP cap. Cheap and runs before we even parse the body
+  // so a flood from one attacker is rejected immediately.
+  const ip = getClientIp(req);
+  const ipCheck = consume(`register:ip:${ip}`, IP_LIMIT, IP_WINDOW_MS);
+  if (!ipCheck.allowed) {
+    return tooManyRequests(ipCheck.retryAfterMs);
+  }
+
   if (!isAdminClientConfigured()) {
     return NextResponse.json(
       {
@@ -95,6 +129,14 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Invalid email address' }, { status: 400 });
   }
 
+  // Stage 2: per-email cap. Stops "register the same address 100 times
+  // to spam the welcome inbox". Email is normalised (trimmed +
+  // lowercased) above so case variations all collapse to one bucket.
+  const emailCheck = consume(`register:email:${email}`, EMAIL_LIMIT, EMAIL_WINDOW_MS);
+  if (!emailCheck.allowed) {
+    return tooManyRequests(emailCheck.retryAfterMs);
+  }
+
   const admin = createAdminSupabaseClient();
 
   // STEP 1: create the auth user pre-confirmed.
@@ -135,6 +177,18 @@ export async function POST(req: Request) {
     is_approved: false, // admin still has to flip this
   });
   if (profileErr) warnings.push(`profile: ${profileErr.message}`);
+
+  // Best-effort: ping all admins (push + Telegram inline Approve/Reject)
+  // and echo the resident so they know their request is in the queue.
+  // Failures here MUST NOT fail the registration — the user is already
+  // created.
+  if (!profileErr) {
+    notify('registration_submitted', userId, {
+      profileId: userId,
+      fullName,
+      flatNumber,
+    }).catch(() => {});
+  }
 
   if (Array.isArray(body.vehicles) && body.vehicles.length > 0) {
     const rows = body.vehicles

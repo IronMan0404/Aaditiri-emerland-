@@ -148,6 +148,20 @@ export default function EventsPage() {
         const msg = err instanceof Error ? err.message : 'Invites failed';
         toast.error(msg);
       }
+
+      // Channel companions: push + Telegram. Best-effort, no toast
+      // on failure (the calendar-invite toast already gave the user
+      // feedback that the event itself was saved).
+      try {
+        await globalThis.fetch('/api/push/event', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ eventId: inserted.id }),
+        });
+      } catch {
+        // Channels are best-effort; in-app + email invite already
+        // covered.
+      }
     }
   }
 

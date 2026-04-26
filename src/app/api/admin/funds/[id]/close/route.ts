@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/fund-auth';
-import { sendPushToAllResidents } from '@/lib/push';
+import { notify } from '@/lib/notify';
 import { formatINR } from '@/lib/money';
 import { logAdminAction } from '@/lib/admin-audit';
 
@@ -157,13 +157,11 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   });
 
   if (body.notify && closed.visibility === 'all_residents') {
-    sendPushToAllResidents({
-      title: `Fund closed: ${closed.name}`,
-      body: surplus > 0
-        ? `Closed with ${formatINR(surplus)} surplus. ${body.closure_notes.slice(0, 80)}`
-        : body.closure_notes.slice(0, 120),
-      url: `/dashboard/funds/${closed.id}`,
-      tag: `fund-closed-${closed.id}`,
+    notify('fund_closed', closed.id, {
+      fundId: closed.id,
+      name: closed.name,
+      surplusPaise: surplus,
+      closureNotes: body.closure_notes.trim(),
     }).catch(() => {});
   }
 

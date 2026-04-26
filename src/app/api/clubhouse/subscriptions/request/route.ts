@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
-import { sendPushToUsers } from '@/lib/push';
+import { notify } from '@/lib/notify';
 import type { ClubhouseRequestMonths } from '@/types';
 
 // Resident-facing endpoint for submitting a clubhouse subscription
@@ -110,25 +110,15 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  // Best-effort: ping admins so they can act on the request quickly.
-  // We don't fail the request if push fan-out misbehaves.
-  try {
-    const { data: admins } = await supabase
-      .from('profiles')
-      .select('id')
-      .eq('role', 'admin');
-    const adminIds = (admins ?? []).map((a) => a.id).filter((id): id is string => Boolean(id));
-    if (adminIds.length > 0) {
-      await sendPushToUsers(adminIds, {
-        title: 'Subscription request',
-        body: `${profile.full_name} (Flat ${profile.flat_number}) requested ${tier.name} for ${months} month${months === 1 ? '' : 's'}.`,
-        url: '/admin/clubhouse',
-        tag: `clubhouse-request:${inserted.id}`,
-      });
-    }
-  } catch {
-    // Swallow push errors; the request is already saved.
-  }
+  // Fan out to admins (with Telegram inline Approve/Reject) and
+  // echo the requester. Failures don't fail the request.
+  notify('subscription_requested', inserted.id, {
+    subscriptionId: inserted.id,
+    requesterId: user.id,
+    flatNumber: profile.flat_number,
+    tierName: tier.name,
+    months,
+  }).catch(() => {});
 
   return NextResponse.json({ ok: true, id: inserted.id });
 }
