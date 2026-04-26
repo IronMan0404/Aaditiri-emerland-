@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
-import { Megaphone, Calendar, Bookmark, Images, Radio, ChevronRight, Pin, Briefcase } from 'lucide-react';
+import { Megaphone, Calendar, Bookmark, Images, Radio, ChevronRight, Pin, Briefcase, Shield } from 'lucide-react';
 import { createClient } from '@/lib/supabase';
 import { useAuth } from '@/hooks/useAuth';
 import { format } from 'date-fns';
@@ -42,6 +42,7 @@ export default function DashboardPage() {
     { href: '/dashboard/events', icon: Calendar, label: 'Events', color: 'bg-orange-100 text-orange-700' },
     { href: '/dashboard/bookings', icon: Bookmark, label: 'Bookings', color: 'bg-blue-100 text-blue-700' },
     { href: '/dashboard/services', icon: Briefcase, label: 'Services', color: 'bg-emerald-100 text-emerald-700' },
+    { href: '/dashboard/staff', icon: Shield, label: 'Society Staff', color: 'bg-teal-100 text-teal-700' },
     { href: '/dashboard/gallery', icon: Images, label: 'Gallery', color: 'bg-pink-100 text-pink-700' },
     { href: '/dashboard/broadcasts', icon: Radio, label: 'Broadcasts', color: 'bg-green-100 text-green-700' },
   ];
@@ -92,9 +93,9 @@ export default function DashboardPage() {
       </div>
 
       <div className="px-4 py-4 space-y-6">
-        {/* Quick Links — 3 columns on mobile (2 rows of 3) so each tile has
-            real estate; 6 across on tablet+ where there's room for one row. */}
-        <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+        {/* Quick Links — 3 columns on mobile (3 rows: 3+3+1) so each tile has
+            real estate; 7 across on tablet+ where there's room for one row. */}
+        <div className="grid grid-cols-3 sm:grid-cols-7 gap-2">
           {quickLinks.map(({ href, icon: Icon, label, color }) => (
             <Link
               key={href}

@@ -2234,6 +2234,74 @@ revoke all on function public.staff_on_duty_now() from public;
 grant execute on function public.staff_on_duty_now() to authenticated;
 
 
+-- ─── 5b. Function: residents see the full staff directory ─────
+-- See migrations/20260515_resident_visible_staff.sql for the full
+-- rationale. Short version: residents need a "call the guard"
+-- directory page (name + phone + on-duty-since), which is more
+-- than staff_on_duty_now() exposes. This function widens the
+-- projection but stays role-gated so anon and pending residents
+-- still get an empty set. Excludes email, address, and audit
+-- columns.
+drop function if exists public.resident_visible_staff();
+
+create function public.resident_visible_staff()
+returns table (
+  id            uuid,
+  full_name     text,
+  staff_role    text,
+  phone         text,
+  photo_url     text,
+  on_duty_since timestamptz
+)
+language sql
+security definer
+set search_path = public
+stable
+as $func$
+  with caller as (
+    select role, is_approved, is_bot
+    from public.profiles
+    where id = auth.uid()
+    limit 1
+  )
+  select
+    sp.id,
+    sp.full_name,
+    sp.staff_role,
+    sp.phone,
+    sp.photo_url,
+    (
+      select sa.check_in_at
+      from public.staff_attendance sa
+      where sa.staff_id = sp.id
+        and sa.check_out_at is null
+      limit 1
+    ) as on_duty_since
+  from public.staff_profiles sp, caller c
+  where sp.is_active = true
+    and c.is_bot = false
+    and (
+      c.role = 'admin'
+      or c.role = 'staff'
+      or (c.role = 'user' and c.is_approved = true)
+    )
+  order by
+    case when (
+      select 1 from public.staff_attendance sa2
+      where sa2.staff_id = sp.id and sa2.check_out_at is null
+    ) is not null then 0 else 1 end,
+    sp.staff_role asc,
+    sp.full_name asc
+$func$;
+
+revoke all on function public.resident_visible_staff() from public;
+revoke all on function public.resident_visible_staff() from anon;
+grant execute on function public.resident_visible_staff() to authenticated;
+
+comment on function public.resident_visible_staff() is
+  'Resident-facing read-only projection of the full active staff roster: id, full_name, staff_role, phone, photo_url, and on_duty_since (null for off-duty). Caller-side gate restricts to admins, staff, and APPROVED residents only — pending residents and anon get an empty set. Bypasses RLS on staff_profiles via SECURITY DEFINER but does NOT expose email, address, hire date, or any audit columns. Distinct from staff_on_duty_now() which masks surnames + omits phone for the dashboard glance widget.';
+
+
 -- ─── 6. RLS ──────────────────────────────────────────────────
 alter table public.staff_profiles enable row level security;
 alter table public.staff_attendance enable row level security;
