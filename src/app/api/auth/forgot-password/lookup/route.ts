@@ -183,10 +183,28 @@ export async function POST(req: Request) {
   // Telegram link lookup. Inactive links don't count.
   const { data: tg } = await admin
     .from('telegram_links')
-    .select('username, first_name, is_active')
+    .select('chat_id, username, first_name, is_active')
     .eq('user_id', profileId)
     .eq('is_active', true)
     .maybeSingle();
+
+  // Defense-in-depth: even when this user has a paired Telegram chat,
+  // we hide the Telegram channel from the picker if that same chat is
+  // active for another app account. In a correctly migrated DB the
+  // partial unique index telegram_links_one_active_per_chat
+  // (migration 20260504) prevents this from ever being possible, but
+  // pre-migration data can still have duplicates and we'd rather
+  // route the user to email than DM a reset OTP into a chat someone
+  // else also reads.
+  let chatIsExclusive = false;
+  if (tg) {
+    const { count } = await admin
+      .from('telegram_links')
+      .select('id', { count: 'exact', head: true })
+      .eq('chat_id', (tg as { chat_id: number }).chat_id)
+      .eq('is_active', true);
+    chatIsExclusive = (count ?? 0) <= 1;
+  }
 
   // We treat synthetic phone-only signup emails as "no email channel"
   // — they look like phone+1714155-…@aaditri.invalid. The resident
@@ -194,7 +212,7 @@ export async function POST(req: Request) {
   const hasRealEmail = Boolean(
     profileEmail && !profileEmail.endsWith('@aaditri.invalid'),
   );
-  const hasTelegram = Boolean(tg);
+  const hasTelegram = Boolean(tg) && chatIsExclusive;
 
   return NextResponse.json({
     ok: true,

@@ -118,18 +118,76 @@ export async function POST(req: Request) {
       );
     }
 
-    // Confirm the link still exists and is active. Otherwise the
-    // user picked Telegram on the form but the link got revoked
-    // between /lookup and /send (rare but cleanly handle).
-    const { data: tg } = await admin
+    // Look up THIS resident's chat — and ONLY this resident's chat.
+    // We deliberately do not call sendTelegramToUsers([userId], ...)
+    // here. That helper is fine for fan-out (broadcasts, registration
+    // approvals, etc.), but for a password reset we want a tighter
+    // contract: exactly one row, exactly one chat_id, and a defensive
+    // check that this chat is not also bound to another app account.
+    //
+    // The partial unique index telegram_links_one_active_per_chat
+    // (migration 20260504) is supposed to prevent the second case at
+    // the DB level. We re-check it here in code so that even if the
+    // index is somehow missing (forgot to run the migration on prod),
+    // a reset OTP for resident A is NEVER delivered to a chat that
+    // resident B also has an active link to.
+    const { data: myLinks, error: linkErr } = await admin
       .from('telegram_links')
-      .select('id')
+      .select('id, chat_id')
       .eq('user_id', profileId)
-      .eq('is_active', true)
-      .maybeSingle();
-    if (!tg) {
+      .eq('is_active', true);
+    if (linkErr) {
+      return NextResponse.json(
+        { error: 'Could not look up Telegram link.' },
+        { status: 500 },
+      );
+    }
+    if (!myLinks || myLinks.length === 0) {
       return NextResponse.json(
         { error: 'No active Telegram link found. Pick "Email" instead.' },
+        { status: 409 },
+      );
+    }
+    if (myLinks.length > 1) {
+      // Should be impossible (telegram_links.user_id is unique), but
+      // fail closed if it ever isn't.
+      return NextResponse.json(
+        {
+          error:
+            'Your Telegram pairing is in an inconsistent state. Re-pair the bot or pick "Email".',
+        },
+        { status: 409 },
+      );
+    }
+    const chatId = (myLinks[0] as { chat_id: number }).chat_id;
+
+    // Defense-in-depth: make sure this chat_id isn't also bound to a
+    // different active app account. If it is, refuse — the reset OTP
+    // would land in someone else's eyes.
+    const { count: chatActiveLinks, error: countErr } = await admin
+      .from('telegram_links')
+      .select('id', { count: 'exact', head: true })
+      .eq('chat_id', chatId)
+      .eq('is_active', true);
+    if (countErr) {
+      return NextResponse.json(
+        { error: 'Could not validate Telegram link.' },
+        { status: 500 },
+      );
+    }
+    if ((chatActiveLinks ?? 0) > 1) {
+      // Two or more app accounts share this Telegram chat. We would
+      // be DM-ing the OTP to a chat that another resident also reads.
+      // Hard refuse and tell the user to use email instead. Fixing
+      // requires the duplicate accounts to /unlink — handled by
+      // /api/telegram/pair DELETE or by re-running migration 20260504
+      // which auto-resolves duplicates by keeping only the most
+      // recently linked row active.
+      return NextResponse.json(
+        {
+          error:
+            'Your Telegram chat is linked to more than one account on this server, so we cannot safely DM the reset code. Please use Email, or contact admin.',
+        },
         { status: 409 },
       );
     }
@@ -145,10 +203,13 @@ export async function POST(req: Request) {
       ttlMinutes: Math.round((minted.expiresAt.getTime() - Date.now()) / 60000),
     });
 
+    // sendTelegramToUsers re-resolves the chat_id from the same
+    // telegram_links row we just validated. Safe because we've
+    // already proven there's exactly one active link for this user
+    // and exactly one active link for the resulting chat_id.
     const r = await sendTelegramToUsers([profileId], {
       text,
       parseMode: 'MarkdownV2',
-      // No dedup: each request is a unique code by design.
     });
 
     if ('skipped' in r && r.skipped) {
