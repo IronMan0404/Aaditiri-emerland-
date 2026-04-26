@@ -60,20 +60,45 @@
 
 -- ─── 1. extend profiles.role to allow 'staff' ──────────────────
 -- The existing CHECK constraint on profiles.role is
--- `check (role in ('admin', 'user'))`. We need to drop it and
--- replace it with one that also permits 'staff'. Idempotent.
+-- `check (role in ('admin', 'user'))`. We need to drop EVERY
+-- check constraint on profiles.role (the original Supabase-named
+-- one, plus any prior `profiles_role_check` we may have created
+-- ourselves on a half-applied earlier run of this migration), then
+-- add the new one. Idempotent: safe to re-run any number of times.
+--
+-- Why we don't just `alter constraint`: Postgres has no
+-- `alter check constraint` operation, you must drop + re-add. And
+-- naively `if not exists` would skip the re-add even when the
+-- existing constraint is the OLD `('admin','user')` shape, leaving
+-- you with a stricter constraint than intended.
+--
+-- Why the conname-matching dance: Postgres formats the same
+-- constraint as either `role IN ('admin','user')` (in
+-- pg_get_constraintdef back to PG13ish) OR as
+-- `role = ANY (ARRAY['admin'::text, 'user'::text])` (newer PG).
+-- Our older migration only matched the first form, so on some
+-- DBs the drop did nothing and the add succeeded once, but
+-- re-runs would crash with "constraint already exists". This
+-- version drops by matching against either format.
 do $$
 declare
   con_name text;
+  def_text text;
 begin
-  for con_name in
-    select conname
+  for con_name, def_text in
+    select conname, pg_get_constraintdef(oid)
     from pg_constraint
     where conrelid = 'public.profiles'::regclass
       and contype = 'c'
-      and pg_get_constraintdef(oid) ilike '%role%in%admin%user%'
   loop
-    execute format('alter table public.profiles drop constraint %I', con_name);
+    -- Heuristic: any check constraint that mentions the role
+    -- column AND mentions both 'admin' and 'user' literals is
+    -- the role-domain constraint, regardless of formatting.
+    if def_text ilike '%role%'
+       and def_text ilike '%admin%'
+       and def_text ilike '%user%' then
+      execute format('alter table public.profiles drop constraint %I', con_name);
+    end if;
   end loop;
 end;
 $$;

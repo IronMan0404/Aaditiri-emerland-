@@ -2018,21 +2018,26 @@ comment on table public.admin_recovery_requests is
 -- ============================================================
 
 -- ─── 1. extend profiles.role to allow 'staff' ──────────────────
--- The existing CHECK constraint on profiles.role is
--- `check (role in ('admin', 'user'))`. We need to drop it and
--- replace it with one that also permits 'staff'. Idempotent.
+-- See migration 20260511_staff_management.sql for full rationale.
+-- We drop any pre-existing role check constraint by matching
+-- against both `role IN (...)` and `role = ANY (ARRAY[...])`
+-- formattings, then add the new one. Idempotent.
 do $$
 declare
   con_name text;
+  def_text text;
 begin
-  for con_name in
-    select conname
+  for con_name, def_text in
+    select conname, pg_get_constraintdef(oid)
     from pg_constraint
     where conrelid = 'public.profiles'::regclass
       and contype = 'c'
-      and pg_get_constraintdef(oid) ilike '%role%in%admin%user%'
   loop
-    execute format('alter table public.profiles drop constraint %I', con_name);
+    if def_text ilike '%role%'
+       and def_text ilike '%admin%'
+       and def_text ilike '%user%' then
+      execute format('alter table public.profiles drop constraint %I', con_name);
+    end if;
   end loop;
 end;
 $$;
@@ -2271,6 +2276,75 @@ create policy "Staff manage own attendance"
 -- This stays correct even if a curious resident pokes around
 -- in the Supabase REST endpoint directly.
 -- ============================================================
+
+
+-- ============================================================
+-- STAFF RESIDENT DIRECTORY (read-only)
+-- ============================================================
+-- See migrations/20260512_staff_resident_directory.sql for the
+-- full rationale. Short version: staff (security + housekeeping)
+-- need to look up resident name + flat + phone to do their job,
+-- but giving them direct SELECT on profiles would also expose
+-- email, push tokens, role flags etc. We expose just the four
+-- needed columns through a SECURITY DEFINER function gated by an
+-- in-body role check.
+-- ============================================================
+create or replace function public.staff_visible_residents(
+  search_query text default null,
+  page_size    int  default 50,
+  page_offset  int  default 0
+)
+returns table (
+  id            uuid,
+  full_name     text,
+  flat_number   text,
+  phone         text,
+  resident_type text,
+  is_approved   boolean
+)
+language sql
+security definer
+set search_path = public
+stable
+as $func$
+  with caller as (
+    select role
+    from public.profiles
+    where id = auth.uid()
+    limit 1
+  )
+  select
+    p.id,
+    p.full_name,
+    p.flat_number,
+    p.phone,
+    p.resident_type,
+    p.is_approved
+  from public.profiles p, caller
+  where caller.role in ('staff', 'admin')
+    and p.is_approved = true
+    and p.is_bot = false
+    and p.role = 'user'
+    and (
+      search_query is null
+      or search_query = ''
+      or p.full_name   ilike '%' || search_query || '%'
+      or p.flat_number ilike '%' || search_query || '%'
+      or p.phone       ilike '%' || search_query || '%'
+    )
+  order by
+    p.flat_number nulls last,
+    p.full_name asc
+  limit greatest(1, least(page_size, 200))
+  offset greatest(0, page_offset)
+$func$;
+
+revoke all on function public.staff_visible_residents(text, int, int) from public;
+revoke all on function public.staff_visible_residents(text, int, int) from anon;
+grant execute on function public.staff_visible_residents(text, int, int) to authenticated;
+
+comment on function public.staff_visible_residents(text, int, int) is
+  'Returns a privacy-preserving projection of approved residents (name, flat, phone, type) for use by staff and admin clients only. Caller-side role gate inside the function body restricts to role IN (staff, admin). Bypasses RLS on profiles via SECURITY DEFINER but does NOT expose email, role, or other sensitive columns.';
 
 
 -- ============================================================
