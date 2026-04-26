@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { Camera, LogOut, Lock, MessageCircle, Car, Users, PawPrint } from 'lucide-react';
+import { Camera, LogOut, Lock, Car, Users, PawPrint } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { createClient } from '@/lib/supabase';
 import { useAuth } from '@/hooks/useAuth';
@@ -20,7 +20,6 @@ export default function ProfilePage() {
   const [form, setForm] = useState({ full_name: profile?.full_name || '', phone: profile?.phone || '', flat_number: profile?.flat_number || '' });
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [whatsappSaving, setWhatsappSaving] = useState(false);
   const [vehicles, setVehicles] = useState<VehicleDraft[]>([]);
   const [family, setFamily] = useState<FamilyMemberDraft[]>([]);
   const [pets, setPets] = useState<PetDraft[]>([]);
@@ -55,22 +54,6 @@ export default function ProfilePage() {
     })();
     return () => { cancelled = true; };
   }, [profile?.id, supabase]);
-
-  const whatsappOptIn = profile?.whatsapp_opt_in !== false;
-
-  async function toggleWhatsAppOptIn() {
-    if (!profile) return;
-    setWhatsappSaving(true);
-    const next = !whatsappOptIn;
-    const { error } = await supabase
-      .from('profiles')
-      .update({ whatsapp_opt_in: next })
-      .eq('id', profile.id);
-    setWhatsappSaving(false);
-    if (error) { toast.error(error.message); return; }
-    toast.success(next ? 'WhatsApp notifications turned on' : 'WhatsApp notifications turned off');
-    refetchProfile?.();
-  }
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
@@ -196,34 +179,7 @@ export default function ProfilePage() {
       {/* Notifications */}
       <div className="bg-white rounded-2xl p-4 shadow-sm mb-4">
         <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Notifications</h3>
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex items-start gap-2 min-w-0">
-            <MessageCircle size={16} className="text-[#25D366] mt-0.5 shrink-0" />
-            <div className="min-w-0">
-              <p className="text-sm font-semibold text-gray-800">WhatsApp from Aaditri Bot</p>
-              <p className="text-xs text-gray-500 leading-snug mt-0.5">
-                Admin broadcasts sent to <span className="font-medium text-gray-700">{profile?.phone || 'your phone'}</span>.
-                {!profile?.phone && ' Add a phone number above to receive them.'}
-              </p>
-            </div>
-          </div>
-          <button
-            type="button"
-            role="switch"
-            onClick={toggleWhatsAppOptIn}
-            disabled={whatsappSaving}
-            aria-checked={whatsappOptIn}
-            aria-label={whatsappOptIn ? 'Turn off WhatsApp notifications' : 'Turn on WhatsApp notifications'}
-            title={whatsappOptIn ? 'Turn off WhatsApp notifications' : 'Turn on WhatsApp notifications'}
-            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors shrink-0 ${whatsappOptIn ? 'bg-[#1B5E20]' : 'bg-gray-300'} disabled:opacity-50`}
-          >
-            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${whatsappOptIn ? 'translate-x-6' : 'translate-x-1'}`} />
-          </button>
-        </div>
-
-        <div className="mt-4 pt-4 border-t border-gray-100">
-          <TelegramConnect />
-        </div>
+        <TelegramConnect />
       </div>
 
       {/* Actions */}

@@ -139,6 +139,10 @@ export async function POST(req: Request) {
       fundId: data.id,
       name: data.name,
       suggestedPerFlatPaise: data.suggested_per_flat ?? null,
+      // Surface "From <Admin Name>" attribution to residents instead
+      // of an anonymous push. auth.profile.full_name is already
+      // populated by requireAdmin().
+      senderName: auth.profile.full_name ?? null,
     });
   }
 

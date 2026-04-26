@@ -154,12 +154,18 @@ export async function POST(req: Request) {
   // tight. Migrate to Vercel's `waitUntil()` (next/after) when this
   // fan-out grows, or move the dispatch to a queue (Inngest, QStash,
   // Supabase pg_cron). Until then, awaiting is the correct trade-off.
+  // Pass the composing admin's full_name so residents see "From
+  // <Admin Name>" instead of an anonymous "New message". Falls back
+  // to the system label inside the renderer if `me.full_name` is
+  // somehow blank.
+  const senderName = me.full_name ?? null;
   await Promise.allSettled(
     recipients.map((recipient) =>
       notify('direct_message_received', `${messageId}:${recipient.id}`, {
         messageId,
         recipientId: recipient.id,
         preview: message,
+        senderName,
       }),
     ),
   );

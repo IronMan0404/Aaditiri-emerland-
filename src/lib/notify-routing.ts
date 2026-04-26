@@ -53,9 +53,31 @@ export interface RenderedNotification {
 
 export type NotificationPayloads = {
   // ---- broadcast / society-wide ------------------------------------
-  broadcast_sent: { broadcastId: string; title: string; body: string; authoredById: string | null };
-  announcement_published: { announcementId: string; title: string; preview: string };
-  event_published: { eventId: string; title: string; whenLabel: string };
+  // `senderName` is the human-readable display string the renderer
+  // attributes the message to. Always pre-resolved at the call site
+  // (renderers are sync and don't have a Supabase client). Pass null
+  // if the sender's profile was deleted; the renderer falls back to
+  // SYSTEM_SENDER_NAME so residents always see "From <someone>".
+  broadcast_sent: {
+    broadcastId: string;
+    title: string;
+    body: string;
+    /** @deprecated kept for back-compat with older queued payloads. */
+    authoredById?: string | null;
+    senderName: string | null;
+  };
+  announcement_published: {
+    announcementId: string;
+    title: string;
+    preview: string;
+    senderName: string | null;
+  };
+  event_published: {
+    eventId: string;
+    title: string;
+    whenLabel: string;
+    senderName: string | null;
+  };
   event_reminder: { eventId: string; userId: string; title: string; whenLabel: string };
 
   // ---- approval flows: admins + requester echo --------------------
@@ -97,7 +119,12 @@ export type NotificationPayloads = {
   booking_decided: { bookingId: string; requesterId: string; approved: boolean };
 
   // ---- direct / 1:1 ------------------------------------------------
-  direct_message_received: { messageId: string; recipientId: string; preview: string };
+  direct_message_received: {
+    messageId: string;
+    recipientId: string;
+    preview: string;
+    senderName: string | null;
+  };
 
   // ---- ticket workflow --------------------------------------------
   ticket_status_changed: {
@@ -126,6 +153,7 @@ export type NotificationPayloads = {
     fundId: string;
     name: string;
     suggestedPerFlatPaise: number | null;
+    senderName: string | null;
   };
   // Admin verified a resident-reported contribution. Resident only.
   fund_contribution_verified: {
@@ -148,6 +176,7 @@ export type NotificationPayloads = {
     name: string;
     surplusPaise: number;
     closureNotes: string;
+    senderName: string | null;
   };
   // Admin-triggered dues nudge. One row per (flat, dispatch). The
   // dedup key (refId) is a unique batch id so the same flat can be
@@ -161,6 +190,20 @@ export type NotificationPayloads = {
     fundCount: number;
     fundName: string | null;
     fundId: string | null;
+  };
+
+  // Admin-curated society-wide reminder fired by the daily cron from
+  // a row in `public.scheduled_reminders`. Treat this as the generic
+  // "scheduled push" — copy is whatever the admin typed; routing
+  // resolves to every approved resident. dedup key (refId) is the
+  // reminder id so a single row can never double-send across cron
+  // retries.
+  scheduled_reminder: {
+    reminderId: string;
+    title: string;
+    body: string;
+    /** Resolved at fire time. May be null if the creating admin's profile was deleted. */
+    senderName: string | null;
   };
 };
 
@@ -228,6 +271,36 @@ function clip(s: string, n: number): string {
   return s.length > n ? s.slice(0, n - 1) + '\u2026' : s;
 }
 
+// Generic fallback used when the original sender's profile has been
+// deleted (created_by/authored_by is null). Always prefer this over
+// omitting attribution so residents never wonder "who sent this?".
+const SYSTEM_SENDER_NAME = 'Aaditri Emerland Admin';
+
+function senderLabel(senderName: string | null | undefined): string {
+  const trimmed = (senderName ?? '').trim();
+  return trimmed.length > 0 ? trimmed : SYSTEM_SENDER_NAME;
+}
+
+/**
+ * Render the "From <Name>" attribution that goes under the title in
+ * Telegram messages. Output is MarkdownV2-escaped italic.
+ */
+function senderTelegramLine(senderName: string | null | undefined): string {
+  return `_From ${md(senderLabel(senderName))}_`;
+}
+
+/**
+ * Append the sender's name to a push body so the OS-level toast
+ * always carries attribution even when residents glance at the
+ * lock screen. Idempotent if the body already contains the name.
+ */
+function senderPushBody(body: string, senderName: string | null | undefined): string {
+  const label = senderLabel(senderName);
+  // Guard against double-attribution if a caller already prefixed it.
+  if (body.toLowerCase().includes(label.toLowerCase())) return body;
+  return `${body} — ${label}`;
+}
+
 // ---------- The routing table ---------------------------------------
 //
 // Every entry: { audience, render, actions? }. The TypeScript dance
@@ -248,15 +321,20 @@ export const ROUTING: RoutingTable = {
   // ────────────────────────────────────────────────────────────────
   broadcast_sent: {
     audience: (_payload, sb) => allApprovedResidents(sb),
-    render: ({ broadcastId, title, body }) => ({
+    render: ({ broadcastId, title, body, senderName }) => ({
       push: {
         title,
-        body: clip(body, 160),
+        body: senderPushBody(clip(body, 140), senderName),
         url: '/dashboard/broadcasts',
         tag: `broadcast:${broadcastId}`,
       },
       telegram: {
-        text: `*${md(title)}*\n\n${md(clip(body, 800))}`,
+        text: [
+          `*${md(title)}*`,
+          senderTelegramLine(senderName),
+          '',
+          md(clip(body, 800)),
+        ].join('\n'),
         buttons: [{ text: 'Open in app', url: '/dashboard/broadcasts' }],
       },
     }),
@@ -264,15 +342,21 @@ export const ROUTING: RoutingTable = {
 
   announcement_published: {
     audience: (_p, sb) => allApprovedResidents(sb),
-    render: ({ announcementId, title, preview }) => ({
+    render: ({ announcementId, title, preview, senderName }) => ({
       push: {
         title: `Announcement: ${title}`,
-        body: clip(preview, 160),
+        body: senderPushBody(clip(preview, 140), senderName),
         url: '/dashboard/announcements',
         tag: `announcement:${announcementId}`,
       },
       telegram: {
-        text: `*Announcement*\n*${md(title)}*\n\n${md(clip(preview, 800))}`,
+        text: [
+          '*Announcement*',
+          `*${md(title)}*`,
+          senderTelegramLine(senderName),
+          '',
+          md(clip(preview, 800)),
+        ].join('\n'),
         buttons: [{ text: 'Open in app', url: '/dashboard/announcements' }],
       },
     }),
@@ -280,15 +364,20 @@ export const ROUTING: RoutingTable = {
 
   event_published: {
     audience: (_p, sb) => allApprovedResidents(sb),
-    render: ({ eventId, title, whenLabel }) => ({
+    render: ({ eventId, title, whenLabel, senderName }) => ({
       push: {
         title: `New event: ${title}`,
-        body: whenLabel,
+        body: senderPushBody(whenLabel, senderName),
         url: '/dashboard/events',
         tag: `event:${eventId}`,
       },
       telegram: {
-        text: `*New event*\n*${md(title)}*\n_${md(whenLabel)}_`,
+        text: [
+          '*New event*',
+          `*${md(title)}*`,
+          `_${md(whenLabel)}_`,
+          senderTelegramLine(senderName),
+        ].join('\n'),
         buttons: [{ text: 'View event', url: `/dashboard/events#${eventId}` }],
       },
     }),
@@ -520,15 +609,20 @@ export const ROUTING: RoutingTable = {
   // ────────────────────────────────────────────────────────────────
   direct_message_received: {
     audience: async ({ recipientId }) => [recipientId],
-    render: ({ messageId, preview }) => ({
+    render: ({ messageId, preview, senderName }) => ({
       push: {
-        title: 'New message',
+        title: `New message from ${senderLabel(senderName)}`,
         body: clip(preview, 160),
         url: '/dashboard/messages',
         tag: `dm:${messageId}`,
       },
       telegram: {
-        text: `*New message*\n${md(clip(preview, 800))}`,
+        text: [
+          '*New message*',
+          senderTelegramLine(senderName),
+          '',
+          md(clip(preview, 800)),
+        ].join('\n'),
         buttons: [{ text: 'Open inbox', url: '/dashboard/messages' }],
       },
     }),
@@ -633,7 +727,7 @@ export const ROUTING: RoutingTable = {
   // ────────────────────────────────────────────────────────────────
   fund_created: {
     audience: (_p, sb) => allApprovedResidents(sb),
-    render: ({ fundId, name, suggestedPerFlatPaise }) => {
+    render: ({ fundId, name, suggestedPerFlatPaise, senderName }) => {
       const suggestedRupees =
         suggestedPerFlatPaise != null ? Math.round(suggestedPerFlatPaise / 100) : null;
       const subtitle = suggestedRupees
@@ -642,13 +736,15 @@ export const ROUTING: RoutingTable = {
       return {
         push: {
           title: `New community fund: ${name}`,
-          body: subtitle,
+          body: senderPushBody(subtitle, senderName),
           url: `/dashboard/funds/${fundId}`,
           tag: `fund-created:${fundId}`,
         },
         telegram: {
           text: [
             `*New community fund: ${md(name)}*`,
+            senderTelegramLine(senderName),
+            '',
             md(subtitle),
           ].join('\n'),
           buttons: [{ text: 'View fund', url: `/dashboard/funds/${fundId}` }],
@@ -703,7 +799,7 @@ export const ROUTING: RoutingTable = {
 
   fund_closed: {
     audience: (_p, sb) => allApprovedResidents(sb),
-    render: ({ fundId, name, surplusPaise, closureNotes }) => {
+    render: ({ fundId, name, surplusPaise, closureNotes, senderName }) => {
       const surplusLabel =
         surplusPaise > 0
           ? `Closed with \u20B9${(surplusPaise / 100).toLocaleString('en-IN')} surplus.`
@@ -714,13 +810,14 @@ export const ROUTING: RoutingTable = {
       return {
         push: {
           title: `Fund closed: ${name}`,
-          body,
+          body: senderPushBody(body, senderName),
           url: `/dashboard/funds/${fundId}`,
           tag: `fund-closed:${fundId}`,
         },
         telegram: {
           text: [
             `*Fund closed: ${md(name)}*`,
+            senderTelegramLine(senderName),
             surplusLabel ? md(surplusLabel) : '',
             md(clip(closureNotes, 400)),
           ]
@@ -766,5 +863,30 @@ export const ROUTING: RoutingTable = {
         },
       };
     },
+  },
+
+  // Admin-curated reminder fired by the daily cron. Society-wide
+  // audience, plain text body, "From <Admin>" attribution to match
+  // broadcasts/announcements/events.
+  scheduled_reminder: {
+    audience: (_p, sb) => allApprovedResidents(sb),
+    render: ({ reminderId, title, body, senderName }) => ({
+      push: {
+        title: `Reminder: ${title}`,
+        body: senderPushBody(clip(body, 140), senderName),
+        url: '/dashboard',
+        tag: `scheduled-reminder:${reminderId}`,
+      },
+      telegram: {
+        text: [
+          '*Reminder*',
+          `*${md(title)}*`,
+          senderTelegramLine(senderName),
+          '',
+          md(clip(body, 1200)),
+        ].join('\n'),
+        buttons: [{ text: 'Open app', url: '/dashboard' }],
+      },
+    }),
   },
 };

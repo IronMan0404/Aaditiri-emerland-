@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, type ComponentType } from 'react';
+import { useMemo, useRef, useState, type ComponentType } from 'react';
 import { Bot, CalendarClock, FileText, Send, Sparkles, Wrench } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '@/hooks/useAuth';
@@ -21,6 +21,7 @@ interface AssistantResponse {
   reply?: string;
   error?: string;
   model?: string;
+  provider?: string;
 }
 
 type PromptIcon = ComponentType<{ size?: number; className?: string }>;
@@ -57,13 +58,20 @@ export default function AssistantPage() {
   const { profile, mounted } = useAuth();
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
+  const [provider, setProvider] = useState<string | null>(null);
   const [model, setModel] = useState<string | null>(null);
+  // Monotonic counter for chat row ids. Using Date.now() in render
+  // (or even in an event handler closed over the component body) trips
+  // React Compiler's purity rule. A ref-backed counter is pure and
+  // produces stable, ordered ids.
+  const idCounter = useRef(0);
+  const nextId = (prefix: string) => `${prefix}-${++idCounter.current}`;
   const [rows, setRows] = useState<ChatRow[]>([
     {
       id: 'welcome',
       role: 'assistant',
       content:
-        'Hi! I am your free Community AI Assistant (local Llama via Ollama). I can help with booking drafts, activity reports, and issue-writeups.',
+        'Hi! I am your Aaditri Community Assistant. I can help draft booking requests, summarize community activity, or write up an issue you want to report.',
     },
   ]);
 
@@ -75,7 +83,7 @@ export default function AssistantPage() {
     if (!message || sending) return;
 
     const mode = forcedMode ?? inferMode(message);
-    const userRow: ChatRow = { id: `u-${Date.now()}`, role: 'user', content: message };
+    const userRow: ChatRow = { id: nextId('u'), role: 'user', content: message };
     const history = rows.slice(-8).map((row) => ({ role: row.role, content: row.content }));
     setRows((prev) => [...prev, userRow]);
     setDraft('');
@@ -91,29 +99,35 @@ export default function AssistantPage() {
 
       if (!res.ok || !json.reply) {
         const errorMsg = json.error ?? `Assistant error (${res.status})`;
+        const isUnconfigured = res.status === 503;
+        const helper = isUnconfigured
+          ? '\n\nAdmin: set AI_PROVIDER=groq and AI_API_KEY in your env to enable the assistant. Free Groq API keys: https://console.groq.com/keys'
+          : '';
         toast.error(errorMsg);
         setRows((prev) => [
           ...prev,
           {
-            id: `a-err-${Date.now()}`,
+            id: nextId('a-err'),
             role: 'assistant',
-            content:
-              `${errorMsg}\n\nIf Ollama is not running yet, start it with:\n` +
-              '1) ollama serve\n2) ollama pull llama3.2:3b',
+            content: `${errorMsg}${helper}`,
           },
         ]);
         return;
       }
 
+      setProvider(json.provider ?? null);
       setModel(json.model ?? null);
-      setRows((prev) => [...prev, { id: `a-${Date.now()}`, role: 'assistant', content: json.reply ?? '' }]);
+      setRows((prev) => [
+        ...prev,
+        { id: nextId('a'), role: 'assistant', content: json.reply ?? '' },
+      ]);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Network error';
       toast.error(msg);
       setRows((prev) => [
         ...prev,
         {
-          id: `a-net-${Date.now()}`,
+          id: nextId('a-net'),
           role: 'assistant',
           content: `I could not reach the assistant API.\n\n${msg}`,
         },
@@ -124,9 +138,9 @@ export default function AssistantPage() {
   }
 
   const assistantMeta = useMemo(() => {
-    if (!model) return 'Free local AI via Ollama';
-    return `Free local AI via Ollama (${model})`;
-  }, [model]);
+    if (!provider || !model) return 'Powered by hosted AI · graceful fallback when not configured';
+    return `${provider} · ${model}`;
+  }, [provider, model]);
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-6 space-y-4">

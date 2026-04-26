@@ -20,6 +20,8 @@ import {
   Wallet,
   Sparkles,
   BookOpen,
+  AlarmClock,
+  Briefcase,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase';
 import { useAuth } from '@/hooks/useAuth';
@@ -68,6 +70,7 @@ export default function MoreSheet({ open, onClose }: MoreSheetProps) {
     { href: '/dashboard/messages', icon: MessageSquare, label: 'Inbox', desc: 'Direct messages from admin', badge: unreadMessages },
     { href: '/dashboard/community', icon: Users, label: 'Community', desc: 'Residents directory' },
     { href: '/dashboard/phonebook', icon: BookOpen, label: 'Phone Book', desc: 'Plumbers, maids, milk, society contacts' },
+    { href: '/dashboard/services', icon: Briefcase, label: 'Services', desc: 'Pricing for cleaning, ironing, watchman & more' },
     { href: '/dashboard/clubhouse', icon: KeyRound, label: 'Clubhouse', desc: 'Subscription, facilities & passes' },
     { href: '/dashboard/gallery', icon: Images, label: 'Gallery', desc: 'Community photos & event albums' },
     { href: '/dashboard/issues', icon: AlertCircle, label: 'Issues', desc: 'Report a problem & track tickets' },
@@ -84,7 +87,9 @@ export default function MoreSheet({ open, onClose }: MoreSheetProps) {
     { href: '/admin/clubhouse/validate', icon: ScanLine, label: 'Validate Pass', desc: 'Scan QR to admit guests' },
     { href: '/admin/funds', icon: Wallet, label: 'Manage Funds', desc: 'Verify contributions & record spends' },
     { href: '/admin/phonebook', icon: BookOpen, label: 'Phone Book', desc: 'Curate society contacts & moderate reports' },
+    { href: '/admin/services', icon: Briefcase, label: 'Services', desc: 'Curate pricing directory & vendor contacts' },
     { href: '/admin/messages', icon: Bot, label: 'Bot Messages', desc: 'Broadcast as Aaditri Bot' },
+    { href: '/admin/reminders', icon: AlarmClock, label: 'Reminders', desc: 'Schedule society-wide notifications' },
     { href: '/admin/updates', icon: Newspaper, label: 'Community Updates', desc: 'Post categorised updates' },
     { href: '/admin/gallery', icon: Images, label: 'Gallery Admin', desc: 'Moderate community photos' },
   ];

@@ -407,3 +407,71 @@ export interface TelegramPairing {
 // it from there into client code would pull in server-only
 // modules, so we don't re-export it here \u2014 just document the
 // intent.
+
+export type ScheduledReminderKind = 'custom';
+export type ScheduledReminderAudience = 'all_residents';
+export type ScheduledReminderStatus =
+  | 'pending'
+  | 'sent'
+  | 'cancelled'
+  | 'failed';
+
+export interface ScheduledReminder {
+  id: string;
+  kind: ScheduledReminderKind;
+  title: string;
+  body: string;
+  // YYYY-MM-DD in IST. Stored as a date in the DB.
+  fire_on: string;
+  audience: ScheduledReminderAudience;
+  status: ScheduledReminderStatus;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  sent_at: string | null;
+  cancelled_at: string | null;
+  fired_count: number;
+  error_message: string | null;
+  last_actor: string | null;
+}
+
+// ============================================================
+// Community services directory (2026-05-07).
+// See supabase/migrations/20260507_services_directory.sql.
+// ============================================================
+
+export interface Service {
+  id: string;
+  name: string;
+  category: string;
+  description: string | null;
+  vendor_name: string | null;
+  vendor_phone: string | null;
+  vendor_whatsapp: string | null;
+  vendor_email: string | null;
+  image_url: string | null;
+  is_active: boolean;
+  display_order: number;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ServiceRate {
+  id: string;
+  service_id: string;
+  label: string;
+  /** integer paise. null = "rate on request". UI converts to ₹. */
+  rate_paise: number | null;
+  /** "/shirt", "/visit", "/month" — appended after the amount. */
+  unit_label: string | null;
+  /** "(both paths)", "(min 10 garments)" — inline qualifier. */
+  note: string | null;
+  display_order: number;
+  created_at: string;
+}
+
+/** Service joined with its rates, as fetched by the directory pages. */
+export interface ServiceWithRates extends Service {
+  rates: ServiceRate[];
+}

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
 import { consume, getClientIp } from '@/lib/rate-limit';
+import { callAi, getAiProviderInfo, type AiMessage } from '@/lib/ai';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -36,8 +37,6 @@ const REQUEST_LIMIT = 20;
 const WINDOW_MS = 10 * 60 * 1000;
 const MAX_MESSAGE_CHARS = 2000;
 const MAX_HISTORY_TURNS = 8;
-const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434';
-const DEFAULT_OLLAMA_MODEL = 'llama3.2:3b';
 
 function truncate(value: string | null | undefined, limit: number): string {
   const clean = (value ?? '').trim();
@@ -165,65 +164,16 @@ async function buildContext(userId: string): Promise<AssistantContext | null> {
   };
 }
 
-async function callOllama({
-  model,
-  baseUrl,
-  messages,
-}: {
-  model: string;
-  baseUrl: string;
-  messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
-}): Promise<{ ok: true; content: string } | { ok: false; error: string; status: number }> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 45_000);
-
-  try {
-    const res = await fetch(`${baseUrl.replace(/\/$/, '')}/api/chat`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        model,
-        stream: false,
-        options: { temperature: 0.2 },
-        messages,
-      }),
-      signal: controller.signal,
-    });
-
-    if (!res.ok) {
-      const text = await res.text();
-      const msg = truncate(text || `Ollama request failed (${res.status})`, 500);
-      return { ok: false, error: msg, status: res.status };
-    }
-
-    const data = (await res.json()) as { message?: { content?: string } };
-    const content = data.message?.content?.trim();
-    if (!content) {
-      return { ok: false, error: 'Ollama returned an empty response.', status: 502 };
-    }
-    return { ok: true, content };
-  } catch (err) {
-    if (err instanceof Error && err.name === 'AbortError') {
-      return { ok: false, error: 'Assistant timed out. Please try a shorter prompt.', status: 504 };
-    }
-    return {
-      ok: false,
-      error:
-        'Could not connect to local Ollama. Start it with "ollama serve" and pull a model (for example: "ollama pull llama3.2:3b").',
-      status: 503,
-    };
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 export async function GET() {
+  const info = getAiProviderInfo();
   return NextResponse.json({
     ok: true,
-    provider: 'ollama',
-    model: process.env.AI_OLLAMA_MODEL ?? DEFAULT_OLLAMA_MODEL,
-    base_url: process.env.AI_OLLAMA_BASE_URL ?? DEFAULT_OLLAMA_BASE_URL,
-    note: 'Free local inference. Requires Ollama running on the server/host.',
+    provider: info.provider,
+    model: info.model,
+    configured: info.configured,
+    note: info.configured
+      ? `AI assistant is live (${info.provider} / ${info.model}).`
+      : 'AI assistant is not configured. Set AI_PROVIDER and AI_API_KEY in env to enable.',
   });
 }
 
@@ -268,27 +218,29 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Could not load community context.' }, { status: 500 });
   }
 
-  const model = process.env.AI_OLLAMA_MODEL ?? DEFAULT_OLLAMA_MODEL;
-  const baseUrl = process.env.AI_OLLAMA_BASE_URL ?? DEFAULT_OLLAMA_BASE_URL;
-  const messages = [
-    { role: 'system' as const, content: buildSystemPrompt(context, mode) },
+  const messages: AiMessage[] = [
+    { role: 'system', content: buildSystemPrompt(context, mode) },
     ...history.map((row) => ({ role: row.role, content: row.content })),
-    { role: 'user' as const, content: message },
+    { role: 'user', content: message },
   ];
 
-  const llm = await callOllama({ model, baseUrl, messages });
-  if (!llm.ok) {
+  const result = await callAi(messages);
+  if (!result.ok) {
     return NextResponse.json(
-      { error: llm.error, provider: 'ollama', model, base_url: baseUrl },
-      { status: llm.status },
+      {
+        error: result.error,
+        provider: result.provider,
+        model: result.model,
+      },
+      { status: result.status },
     );
   }
 
   return NextResponse.json({
     ok: true,
-    provider: 'ollama',
-    model,
-    reply: llm.content,
+    provider: result.provider,
+    model: result.model,
+    reply: result.content,
     context_counts: {
       announcements: context.announcements.length,
       broadcasts: context.broadcasts.length,
@@ -298,4 +250,3 @@ export async function POST(req: Request) {
     },
   });
 }
-

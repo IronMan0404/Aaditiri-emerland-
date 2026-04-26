@@ -3,22 +3,31 @@ import { createAdminSupabaseClient, isAdminClientConfigured } from '@/lib/supaba
 import { sendEmail, isEmailConfigured } from '@/lib/email';
 import { consume, getClientIp } from '@/lib/rate-limit';
 import { notifyAfter } from '@/lib/notify';
+import { normalizePhoneE164 } from '@/lib/phone';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /**
- * Self-service registration that bypasses Supabase's built-in email mailer.
+ * Self-service registration with email-or-phone identifier.
  *
  * Background: Supabase's free SMTP cap is ~2 confirmation emails per project
  * per hour, which kept tripping `email rate limit exceeded` for our community.
  * We sidestep it by:
  *   1) Creating the auth user pre-confirmed via the service-role admin API
- *      (so Supabase NEVER tries to send an email).
+ *      (so Supabase NEVER tries to send an email or SMS).
  *   2) Inserting their public.profiles row with `is_approved = false` so they
  *      still cannot reach /dashboard until an admin approves them.
  *   3) Sending a "welcome / pending approval" email ourselves through Brevo
- *      (the same path used by booking notifications), which has 300/day free.
+ *      (the same path used by booking notifications) — but only if the
+ *      resident actually provided an email address.
+ *
+ * Identifier rules (changed 2026-04-26):
+ *   - At least ONE of email or phone is required.
+ *   - Both is allowed (the resident can later log in with either).
+ *   - We do NOT send an OTP. Identity is verified by the admin-approval
+ *     step, exactly like email registration. Saves the cost + DLT pain
+ *     of an SMS gateway and matches the trust model we've used since day 1.
  *
  * This route is the ONLY public-facing endpoint that uses the service-role
  * key — same justification as the user-delete route. The endpoint validates
@@ -28,9 +37,9 @@ export const dynamic = 'force-dynamic';
 
 interface RegisterPayload {
   email?: string;
+  phone?: string;
   password?: string;
   full_name?: string;
-  phone?: string;
   flat_number?: string;
   resident_type?: 'owner' | 'tenant';
   vehicles?: Array<{ number: string; type: 'car' | 'bike' | 'other' }>;
@@ -54,15 +63,10 @@ const FAMILY_RELATIONS = new Set(['spouse', 'son', 'daughter', 'parent', 'siblin
 const GENDERS = new Set(['male', 'female', 'other']);
 const PET_SPECIES = new Set(['dog', 'cat', 'bird', 'other']);
 
-// Per-IP and per-email caps. Tuned for a residential community of a few
-// hundred flats — a legitimate user almost never needs more than one
-// successful registration per email, ever, so the per-email cap is the
-// sharper of the two. Both are best-effort (in-process counters); see
-// src/lib/rate-limit.ts for the trade-offs.
-const IP_LIMIT = 5;                  // 5 attempts per IP …
-const IP_WINDOW_MS = 15 * 60 * 1000; // … per 15 minutes
-const EMAIL_LIMIT = 3;               // 3 attempts per email …
-const EMAIL_WINDOW_MS = 60 * 60 * 1000; // … per hour
+const IP_LIMIT = 5;
+const IP_WINDOW_MS = 15 * 60 * 1000;
+const IDENT_LIMIT = 3;
+const IDENT_WINDOW_MS = 60 * 60 * 1000;
 
 function tooManyRequests(retryAfterMs: number) {
   const retryAfterSeconds = Math.max(1, Math.ceil(retryAfterMs / 1000));
@@ -79,8 +83,6 @@ function tooManyRequests(retryAfterMs: number) {
 }
 
 export async function POST(req: Request) {
-  // Stage 1: per-IP cap. Cheap and runs before we even parse the body
-  // so a flood from one attacker is rejected immediately.
   const ip = getClientIp(req);
   const ipCheck = consume(`register:ip:${ip}`, IP_LIMIT, IP_WINDOW_MS);
   if (!ipCheck.allowed) {
@@ -105,16 +107,29 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const email = body.email?.trim().toLowerCase();
+  const email = body.email?.trim().toLowerCase() || '';
+  const phoneInput = body.phone?.trim() || '';
+  const phone = phoneInput ? normalizePhoneE164(phoneInput) : null;
   const password = body.password ?? '';
   const fullName = body.full_name?.trim() ?? '';
   const flatNumber = body.flat_number?.trim() ?? '';
   const residentType = body.resident_type;
-  const phone = body.phone?.trim() ?? '';
 
-  if (!email || !password || !fullName || !flatNumber) {
+  if (!email && !phone) {
     return NextResponse.json(
-      { error: 'email, password, full_name and flat_number are required' },
+      { error: 'Either email or phone is required' },
+      { status: 400 },
+    );
+  }
+  if (phoneInput && !phone) {
+    return NextResponse.json(
+      { error: 'Enter a valid phone number (10 digits or +91…)' },
+      { status: 400 },
+    );
+  }
+  if (!password || !fullName || !flatNumber) {
+    return NextResponse.json(
+      { error: 'password, full_name and flat_number are required' },
       { status: 400 },
     );
   }
@@ -124,64 +139,96 @@ export async function POST(req: Request) {
   if (password.length < 6) {
     return NextResponse.json({ error: 'Password must be at least 6 characters' }, { status: 400 });
   }
-  // Soft email shape check — Supabase will give a tighter error if it's truly bad.
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return NextResponse.json({ error: 'Invalid email address' }, { status: 400 });
   }
 
-  // Stage 2: per-email cap. Stops "register the same address 100 times
-  // to spam the welcome inbox". Email is normalised (trimmed +
-  // lowercased) above so case variations all collapse to one bucket.
-  const emailCheck = consume(`register:email:${email}`, EMAIL_LIMIT, EMAIL_WINDOW_MS);
-  if (!emailCheck.allowed) {
-    return tooManyRequests(emailCheck.retryAfterMs);
+  // Per-identifier rate-limit. We use whichever identifier was provided
+  // (preferring email) so duplicated rapid attempts on the same number
+  // get caught even if the IP rotates.
+  const identKey = email || phone || '';
+  if (identKey) {
+    const identCheck = consume(`register:ident:${identKey}`, IDENT_LIMIT, IDENT_WINDOW_MS);
+    if (!identCheck.allowed) {
+      return tooManyRequests(identCheck.retryAfterMs);
+    }
   }
 
   const admin = createAdminSupabaseClient();
 
-  // STEP 1: create the auth user pre-confirmed.
-  const { data: created, error: createErr } = await admin.auth.admin.createUser({
-    email,
+  // Pre-check: if a profile already has this phone, fail with a clean
+  // 409 rather than letting the DB unique index throw a confusing error.
+  if (phone) {
+    const { data: existing } = await admin
+      .from('profiles')
+      .select('id')
+      .eq('phone', phone)
+      .maybeSingle();
+    if (existing) {
+      return NextResponse.json(
+        {
+          error:
+            'An account with this phone number already exists. Please sign in or use forgot-password.',
+        },
+        { status: 409 },
+      );
+    }
+  }
+
+  // Build the createUser payload. Both identifiers can be present at
+  // once — Supabase happily indexes both and signInWithPassword works
+  // with either.
+  //
+  // For phone-only signups (no email), Supabase's createUser STILL
+  // requires email_confirm to be implicitly satisfied; passing only
+  // `phone` + `phone_confirm: true` is the documented way.
+  const createPayload: Parameters<typeof admin.auth.admin.createUser>[0] = {
     password,
-    email_confirm: true, // critical: skips Supabase's confirmation mailer entirely
     user_metadata: {
       full_name: fullName,
       flat_number: flatNumber,
       resident_type: residentType,
     },
-  });
+  };
+  if (email) {
+    createPayload.email = email;
+    createPayload.email_confirm = true;
+  }
+  if (phone) {
+    createPayload.phone = phone.replace(/^\+/, ''); // Supabase wants digits, no +
+    createPayload.phone_confirm = true;
+  }
+
+  const { data: created, error: createErr } = await admin.auth.admin.createUser(createPayload);
 
   if (createErr || !created.user) {
-    // Translate Supabase's "User already registered" into a friendlier 409.
     const msg = createErr?.message ?? 'Failed to create user';
-    const status = /already.*regist|already.*exist/i.test(msg) ? 409 : 400;
+    const status = /already.*regist|already.*exist|duplicate/i.test(msg) ? 409 : 400;
     return NextResponse.json({ error: msg }, { status });
   }
 
   const userId = created.user.id;
 
-  // STEP 2: persist the profile + optional collections. Failures here are
-  // non-fatal because the auth user already exists — the resident can fix
-  // up profile details from the Profile page after admin approval.
-  // We collect partial-failure messages so the response can warn the UI.
+  // STEP 2: persist the profile + optional collections.
   const warnings: string[] = [];
+
+  // profiles.email is NOT NULL in our schema. Phone-only signups get a
+  // synthetic placeholder so the row is still valid; the resident can
+  // update it from /dashboard/profile after admin approval.
+  const profileEmail = email || `phone+${userId}@aaditri.invalid`;
 
   const { error: profileErr } = await admin.from('profiles').upsert({
     id: userId,
-    email,
+    email: profileEmail,
     full_name: fullName,
     phone: phone || null,
     flat_number: flatNumber,
     resident_type: residentType,
     role: 'user',
-    is_approved: false, // admin still has to flip this
+    is_approved: false,
   });
   if (profileErr) warnings.push(`profile: ${profileErr.message}`);
 
-  // Best-effort: ping all admins (push + Telegram inline Approve/Reject)
-  // and echo the resident so they know their request is in the queue.
-  // Failures here MUST NOT fail the registration — the user is already
-  // created.
   if (!profileErr) {
     notifyAfter('registration_submitted', userId, {
       profileId: userId,
@@ -236,12 +283,13 @@ export async function POST(req: Request) {
     }
   }
 
-  // STEP 3: send our own welcome email via Brevo. Fire-and-watch: a failure
-  // here is logged but does NOT fail the registration — the resident is
-  // already created and pending. Admins can resend if needed.
+  // STEP 3: send our welcome email ONLY when we actually have a real
+  // email address. Phone-only signups don't get an automated welcome —
+  // there's no good free SMS path for it. The admin will see them in
+  // the approval queue and can reach out by phone if they want to.
   let emailStatus: 'sent' | 'skipped' | 'failed' = 'skipped';
   let emailError: string | null = null;
-  if (isEmailConfigured()) {
+  if (email && isEmailConfigured()) {
     const result = await sendEmail({
       to: email,
       subject: 'Welcome to Aaditri Emerland — pending approval',

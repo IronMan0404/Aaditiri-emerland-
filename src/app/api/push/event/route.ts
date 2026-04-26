@@ -54,17 +54,31 @@ export async function POST(request: Request) {
 
   const { data: ev, error } = await supabase
     .from('events')
-    .select('id, title, date, time')
+    .select('id, title, date, time, created_by')
     .eq('id', body.eventId)
     .single();
   if (error || !ev) {
     return NextResponse.json({ error: 'Event not found' }, { status: 404 });
   }
 
+  // Resolve the organiser's display name so residents see "From
+  // <Name>" attribution. Best-effort — falls back to a system label
+  // if the creator's profile was deleted.
+  let senderName: string | null = null;
+  if (ev.created_by) {
+    const { data: senderProfile } = await supabase
+      .from('profiles')
+      .select('full_name')
+      .eq('id', ev.created_by)
+      .maybeSingle();
+    senderName = senderProfile?.full_name ?? null;
+  }
+
   const result = await notify('event_published', ev.id, {
     eventId: ev.id,
     title: ev.title,
     whenLabel: formatWhen(ev.date, ev.time),
+    senderName,
   });
 
   return NextResponse.json({

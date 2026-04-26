@@ -162,6 +162,9 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       name: closed.name,
       surplusPaise: surplus,
       closureNotes: body.closure_notes.trim(),
+      // Resident-visible attribution. auth.profile.full_name is
+      // already populated by requireAdmin().
+      senderName: auth.profile.full_name ?? null,
     });
   }
 

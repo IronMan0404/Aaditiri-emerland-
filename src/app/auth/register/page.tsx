@@ -9,6 +9,7 @@ import AuthShell from '@/components/layout/AuthShell';
 import VehiclesEditor, { type VehicleDraft } from '@/components/ui/VehiclesEditor';
 import FamilyEditor, { type FamilyMemberDraft } from '@/components/ui/FamilyEditor';
 import PetsEditor, { type PetDraft } from '@/components/ui/PetsEditor';
+import { normalizePhoneE164 } from '@/lib/phone';
 
 export default function RegisterPage() {
   const [form, setForm] = useState({
@@ -22,14 +23,26 @@ export default function RegisterPage() {
   const [loading, setLoading] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [emailDelivered, setEmailDelivered] = useState(true);
+  const [submittedEmail, setSubmittedEmail] = useState('');
   const router = useRouter();
 
   function update(key: string, value: string) { setForm((f) => ({ ...f, [key]: value })); }
 
   async function handleRegister(e: React.FormEvent) {
     e.preventDefault();
-    if (!form.fullName || !form.email || !form.password || !form.flatNumber) {
-      toast.error('Please fill in all required fields'); return;
+
+    const email = form.email.trim();
+    const phoneRaw = form.phone.trim();
+    const phoneNormalized = phoneRaw ? normalizePhoneE164(phoneRaw) : null;
+
+    if (!form.fullName || !form.flatNumber) {
+      toast.error('Please fill in your name and flat number'); return;
+    }
+    if (!email && !phoneRaw) {
+      toast.error('Please provide either an email or a phone number'); return;
+    }
+    if (phoneRaw && !phoneNormalized) {
+      toast.error('Enter a valid phone number'); return;
     }
     if (!form.residentType) {
       toast.error('Please select Owner or Tenant'); return;
@@ -39,21 +52,16 @@ export default function RegisterPage() {
 
     setLoading(true);
 
-    // Use our own /api/auth/register endpoint instead of supabase.auth.signUp().
-    // The server route creates the user pre-confirmed via the service-role key
-    // (so Supabase's mailer is never invoked — bypassing its 2/hr rate limit)
-    // and sends the welcome email through Brevo. See the route handler for
-    // the full rationale.
     let res: Response;
     try {
       res = await fetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          email: form.email.trim(),
+          email: email || undefined,
+          phone: phoneNormalized || undefined,
           password: form.password,
           full_name: form.fullName,
-          phone: form.phone,
           flat_number: form.flatNumber,
           resident_type: form.residentType,
           vehicles: vehicles.map((v) => ({ number: v.number, type: v.type })),
@@ -90,15 +98,15 @@ export default function RegisterPage() {
       return;
     }
 
-    // Surface partial-failure warnings (e.g. couldn't save a vehicle row) but
-    // still treat registration as successful — the auth user exists.
     if (payload.warnings && payload.warnings.length > 0) {
       toast(`Account created. Some details didn't save: ${payload.warnings.join(', ')}`, {
         icon: '⚠️',
       });
     }
 
-    setEmailDelivered(payload.email_status === 'sent');
+    // Email status only matters when the user actually provided an email.
+    setEmailDelivered(email ? payload.email_status === 'sent' : true);
+    setSubmittedEmail(email);
     setSubmitted(true);
     setLoading(false);
   }
@@ -115,16 +123,23 @@ export default function RegisterPage() {
             Your account is <strong>pending admin approval</strong>. You&apos;ll be
             able to sign in once an admin reviews your registration.
           </p>
-          {emailDelivered ? (
-            <p className="text-gray-500 text-xs mb-6">
-              We&apos;ve sent a confirmation email to <strong>{form.email}</strong>.
-              Don&apos;t see it? Check your spam folder.
-            </p>
+          {submittedEmail ? (
+            emailDelivered ? (
+              <p className="text-gray-500 text-xs mb-6">
+                We&apos;ve sent a confirmation email to <strong>{submittedEmail}</strong>.
+                Don&apos;t see it? Check your spam folder.
+              </p>
+            ) : (
+              <p className="text-amber-600 text-xs mb-6">
+                We couldn&apos;t send a confirmation email this time, but your
+                account was still created. Please reach out to an admin if you
+                need help.
+              </p>
+            )
           ) : (
-            <p className="text-amber-600 text-xs mb-6">
-              We couldn&apos;t send a confirmation email this time, but your
-              account was still created. Please reach out to an admin if you
-              need help.
+            <p className="text-gray-500 text-xs mb-6">
+              We&apos;ll let you know via the contact details you registered with
+              once an admin approves your account.
             </p>
           )}
           <Button onClick={() => router.push('/auth/login')} className="w-full">Go to Login</Button>
@@ -141,12 +156,14 @@ export default function RegisterPage() {
           <h1 className="text-xl font-bold text-white drop-shadow-sm">Join Aaditri Emerland</h1>
         </div>
         <div className="bg-white/95 backdrop-blur-sm rounded-2xl p-6 shadow-2xl">
-          <h2 className="text-xl font-bold text-gray-900 mb-5">Create Account</h2>
+          <h2 className="text-xl font-bold text-gray-900 mb-2">Create Account</h2>
+          <p className="text-xs text-gray-500 mb-5 leading-relaxed">
+            Provide either an email or a phone number — you can add the other later from your profile.
+          </p>
           <form onSubmit={handleRegister} className="space-y-3">
             <Input label="Full Name *" value={form.fullName} onChange={(e) => update('fullName', e.target.value)} placeholder="John Smith" />
             <Input label="Flat Number *" value={form.flatNumber} onChange={(e) => update('flatNumber', e.target.value)} placeholder="A-101" />
 
-            {/* Resident Type */}
             <div>
               <label className="text-sm font-medium text-gray-700 block mb-2">Resident Type *</label>
               <div className="grid grid-cols-2 gap-2">
@@ -166,8 +183,11 @@ export default function RegisterPage() {
               )}
             </div>
 
-            <Input label="Email *" type="email" value={form.email} onChange={(e) => update('email', e.target.value)} placeholder="you@example.com" />
+            <Input label="Email" type="email" value={form.email} onChange={(e) => update('email', e.target.value)} placeholder="you@example.com" />
             <Input label="Phone Number" type="tel" value={form.phone} onChange={(e) => update('phone', e.target.value)} placeholder="+91 98765 43210" />
+            <p className="text-[11px] text-gray-500 -mt-1.5 leading-relaxed">
+              At least one of email or phone is required. Indian numbers are auto-prefixed +91.
+            </p>
 
             <div>
               <label className="text-sm font-medium text-gray-700 block mb-1.5">Vehicles (optional)</label>

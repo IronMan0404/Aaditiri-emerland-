@@ -49,7 +49,9 @@ export type AdminAuditTargetType =
   | 'fund_spend'
   | 'fund_refund'
   | 'admin_tag'
-  | 'profile_admin_tag';
+  | 'profile_admin_tag'
+  | 'scheduled_reminder'
+  | 'service';
 
 export interface LogAdminActionInput {
   actor: {

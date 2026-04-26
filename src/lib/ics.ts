@@ -16,6 +16,20 @@ export interface CalendarInvite {
   attendee?: { name: string; email: string };
   method?: 'REQUEST' | 'CANCEL' | 'PUBLISH';
   sequence?: number;
+  /**
+   * RFC 5545 STATUS field. Defaults to CONFIRMED.
+   *
+   * - TENTATIVE: Booking submitted but not yet approved. Most calendar
+   *   apps render this with hatched/grey shading so the resident can
+   *   see "this slot is being requested" without it overwriting a
+   *   confirmed event in the same window.
+   * - CONFIRMED: Booking approved.
+   * - CANCELLED: Booking rejected/withdrawn. Combined with method=
+   *   CANCEL and a bumped SEQUENCE, calendar apps will remove the
+   *   event from the resident's calendar instead of leaving a stale
+   *   tentative entry.
+   */
+  status?: 'TENTATIVE' | 'CONFIRMED' | 'CANCELLED';
 }
 
 /**
@@ -143,12 +157,108 @@ export function buildIcs(invite: CalendarInvite): string {
     );
   }
   lines.push(`SEQUENCE:${seq}`);
-  lines.push('STATUS:CONFIRMED');
-  lines.push('TRANSP:OPAQUE');
+  lines.push(`STATUS:${invite.status ?? 'CONFIRMED'}`);
+  // TRANSP:TRANSPARENT for tentative requests means "doesn't block
+  // free/busy" — appropriate while we're waiting for an admin to
+  // approve. CONFIRMED + CANCELLED both go OPAQUE so the slot is
+  // honoured (or removed) properly.
+  lines.push(`TRANSP:${invite.status === 'TENTATIVE' ? 'TRANSPARENT' : 'OPAQUE'}`);
   lines.push('END:VEVENT');
   lines.push('END:VCALENDAR');
 
   return lines.map(foldLine).join('\r\n') + '\r\n';
+}
+
+// ---------- Booking-specific helpers ---------------------------------
+//
+// The booking flow needs the same ICS three times — once on submit
+// (TENTATIVE, sequence 0), once on approve (CONFIRMED, sequence 1,
+// method=REQUEST so calendar apps treat it as an UPDATE), once on
+// reject (CANCELLED, sequence 2, method=CANCEL). Centralising the
+// shape here means the three call sites can't drift.
+
+export interface BookingInviteParams {
+  bookingId: string;
+  facility: string;
+  date: string;
+  timeSlot: string;
+  notes?: string | null;
+  resident: { name: string; email: string };
+  /** Phase determines status / method / sequence. */
+  phase: 'tentative' | 'confirmed' | 'cancelled';
+}
+
+export interface BookingInviteResult {
+  /** Set when the time slot couldn't be parsed; carry on without ICS in that case. */
+  schedulable: boolean;
+  startUtc: Date | null;
+  endUtc:   Date | null;
+  ics:      string | null;
+  filename: string;
+  contentType: string;
+  /** Stable UID that survives across phases so calendar apps de-dup. */
+  uid: string;
+  method: 'REQUEST' | 'CANCEL';
+  status: 'TENTATIVE' | 'CONFIRMED' | 'CANCELLED';
+  sequence: number;
+}
+
+const BOOKING_PHASE_DEFAULTS = {
+  tentative: { method: 'REQUEST' as const, status: 'TENTATIVE' as const, sequence: 0 },
+  confirmed: { method: 'REQUEST' as const, status: 'CONFIRMED' as const, sequence: 1 },
+  cancelled: { method: 'CANCEL'  as const, status: 'CANCELLED' as const, sequence: 2 },
+};
+
+/**
+ * Build the calendar-invite payload for a booking. Returns
+ * `schedulable=false` when the time slot can't be parsed (ICS file
+ * is null in that case; caller should send the email without
+ * attachment + skip the "add to calendar" buttons).
+ */
+export function buildBookingInvite(p: BookingInviteParams): BookingInviteResult {
+  const range = parseTimeRange(p.timeSlot);
+  const startUtc = range ? istDateToUtc(p.date, range.start) : null;
+  const endUtc   = range ? istDateToUtc(p.date, range.end)   : null;
+  const schedulable = Boolean(startUtc && endUtc);
+  const phase = BOOKING_PHASE_DEFAULTS[p.phase];
+
+  // UID stays constant across phases so when the resident's calendar
+  // sees the CONFIRMED message after the TENTATIVE one, it updates
+  // the existing entry instead of duplicating.
+  const uid = `booking-${p.bookingId}@aaditri-emerland`;
+
+  const ics = schedulable
+    ? buildIcs({
+        uid,
+        title: `${p.facility} — Booking`,
+        description: p.notes ?? undefined,
+        location: p.facility,
+        startUtc: startUtc!,
+        endUtc:   endUtc!,
+        organizer: { name: 'Aaditri Emerland', email: 'noreply@aaditri-emerland.local' },
+        attendee:  { name: p.resident.name, email: p.resident.email },
+        method:   phase.method,
+        status:   phase.status,
+        sequence: phase.sequence,
+      })
+    : null;
+
+  return {
+    schedulable,
+    startUtc,
+    endUtc,
+    ics,
+    filename: 'booking.ics',
+    // method=REQUEST/CANCEL is part of the calendar MIME type so the
+    // mail client routes it through its calendar pipeline. Outlook in
+    // particular needs this header to render the "Accept/Tentative/
+    // Decline" pill.
+    contentType: `text/calendar; method=${phase.method}; charset=utf-8`,
+    uid,
+    method:   phase.method,
+    status:   phase.status,
+    sequence: phase.sequence,
+  };
 }
 
 /**

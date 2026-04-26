@@ -1,7 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Megaphone, Calendar, Bookmark, Images, Radio, User, Home, Settings, Newspaper, LogOut, Shield, MessageSquare, Bot, Users, AlertCircle, KeyRound, ScanLine, Wallet, Sparkles, BookOpen } from 'lucide-react';
+import { Megaphone, Calendar, Bookmark, Images, Radio, User, Home, Settings, Newspaper, LogOut, Shield, MessageSquare, Bot, Users, AlertCircle, KeyRound, ScanLine, Wallet, Sparkles, BookOpen, AlarmClock, Briefcase } from 'lucide-react';
 import { createClient } from '@/lib/supabase';
 import { useAuth } from '@/hooks/useAuth';
 import { useEffect, useMemo } from 'react';
@@ -14,6 +14,7 @@ const navItems = [
   { href: '/dashboard/messages', icon: MessageSquare, label: 'Messages' },
   { href: '/dashboard/community', icon: Users, label: 'Community' },
   { href: '/dashboard/phonebook', icon: BookOpen, label: 'Phone Book' },
+  { href: '/dashboard/services', icon: Briefcase, label: 'Services' },
   { href: '/dashboard/events', icon: Calendar, label: 'Events' },
   { href: '/dashboard/bookings', icon: Bookmark, label: 'Bookings' },
   { href: '/dashboard/clubhouse', icon: KeyRound, label: 'Clubhouse' },
@@ -32,7 +33,9 @@ const adminItems = [
   { href: '/admin/clubhouse/validate', icon: ScanLine, label: 'Validate Pass' },
   { href: '/admin/funds', icon: Wallet, label: 'Funds' },
   { href: '/admin/phonebook', icon: BookOpen, label: 'Phone Book' },
+  { href: '/admin/services', icon: Briefcase, label: 'Services' },
   { href: '/admin/messages', icon: Bot, label: 'Bot Messages' },
+  { href: '/admin/reminders', icon: AlarmClock, label: 'Reminders' },
   { href: '/admin/updates', icon: Newspaper, label: 'Updates' },
   { href: '/admin/gallery', icon: Images, label: 'Gallery' },
 ];

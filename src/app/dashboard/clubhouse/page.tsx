@@ -1,7 +1,7 @@
 'use client';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { Calendar, Users as UsersIcon, Award, Ticket, ArrowRight, Hourglass, AlertCircle, X } from 'lucide-react';
+import { Calendar, Users as UsersIcon, Award, Ticket, ArrowRight, Hourglass, AlertCircle, X, KeyRound } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { format, differenceInDays } from 'date-fns';
 import { createClient } from '@/lib/supabase';
@@ -97,9 +97,12 @@ export default function ClubhouseHomePage() {
   return (
     <div className="max-w-2xl mx-auto px-4 py-6 space-y-4">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Clubhouse</h1>
-        <p className="text-xs text-gray-500 mt-0.5">
-          {profile?.flat_number ? `Flat ${profile.flat_number}` : 'Set your flat number in your profile to subscribe'}
+        <div className="flex items-center gap-2">
+          <KeyRound size={22} className="text-[#1B5E20]" />
+          <h1 className="text-2xl font-bold text-gray-900">Clubhouse</h1>
+        </div>
+        <p className="text-sm text-gray-500 mt-1">
+          {profile?.flat_number ? `Flat ${profile.flat_number}` : 'Set your flat number in your profile to subscribe.'}
         </p>
       </div>
 

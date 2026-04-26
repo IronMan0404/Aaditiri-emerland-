@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
-import { Megaphone, Calendar, Bookmark, Images, Radio, Newspaper, ChevronRight, Pin } from 'lucide-react';
+import { Megaphone, Calendar, Bookmark, Images, Radio, ChevronRight, Pin, Briefcase } from 'lucide-react';
 import { createClient } from '@/lib/supabase';
 import { useAuth } from '@/hooks/useAuth';
 import { format } from 'date-fns';
@@ -40,6 +40,7 @@ export default function DashboardPage() {
     { href: '/dashboard/announcements', icon: Megaphone, label: 'Announcements', color: 'bg-purple-100 text-purple-700' },
     { href: '/dashboard/events', icon: Calendar, label: 'Events', color: 'bg-orange-100 text-orange-700' },
     { href: '/dashboard/bookings', icon: Bookmark, label: 'Bookings', color: 'bg-blue-100 text-blue-700' },
+    { href: '/dashboard/services', icon: Briefcase, label: 'Services', color: 'bg-emerald-100 text-emerald-700' },
     { href: '/dashboard/gallery', icon: Images, label: 'Gallery', color: 'bg-pink-100 text-pink-700' },
     { href: '/dashboard/broadcasts', icon: Radio, label: 'Broadcasts', color: 'bg-green-100 text-green-700' },
   ];
@@ -90,12 +91,19 @@ export default function DashboardPage() {
       </div>
 
       <div className="px-4 py-4 space-y-6">
-        {/* Quick Links */}
-        <div className="grid grid-cols-5 gap-2">
+        {/* Quick Links — 3 columns on mobile (2 rows of 3) so each tile has
+            real estate; 6 across on tablet+ where there's room for one row. */}
+        <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
           {quickLinks.map(({ href, icon: Icon, label, color }) => (
-            <Link key={href} href={href} className="flex flex-col items-center gap-2 p-3 bg-white rounded-2xl shadow-sm hover:shadow-md transition-shadow">
-              <div className={`w-10 h-10 rounded-xl ${color} flex items-center justify-center`}><Icon size={20} /></div>
-              <span className="text-[10px] font-semibold text-gray-700 text-center leading-tight">{label}</span>
+            <Link
+              key={href}
+              href={href}
+              className="flex flex-col items-center gap-2 p-3 bg-white rounded-2xl border border-gray-100 hover:border-[#1B5E20]/30 hover:shadow-sm transition-all"
+            >
+              <div className={`w-11 h-11 rounded-xl ${color} flex items-center justify-center`}>
+                <Icon size={20} />
+              </div>
+              <span className="text-xs font-semibold text-gray-700 text-center leading-tight">{label}</span>
             </Link>
           ))}
         </div>
@@ -126,11 +134,13 @@ export default function DashboardPage() {
             <Link href="/dashboard/announcements" className="text-xs text-[#1B5E20] font-semibold flex items-center">See all <ChevronRight size={14} /></Link>
           </div>
           {announcements.length === 0 ? (
-            <p className="text-gray-400 text-sm text-center py-4">No announcements yet</p>
+            <div className="text-center py-6 bg-white rounded-xl border border-dashed border-gray-200 text-sm text-gray-400">
+              No announcements yet
+            </div>
           ) : (
             <div className="space-y-2">
               {announcements.map((a) => (
-                <div key={a.id} className={`bg-white rounded-xl p-4 shadow-sm ${a.is_pinned ? 'border-l-4 border-yellow-400' : ''}`}>
+                <div key={a.id} className={`bg-white rounded-xl p-4 border border-gray-200 hover:shadow-sm transition-shadow ${a.is_pinned ? 'border-l-4 border-l-yellow-400' : ''}`}>
                   {a.is_pinned && <span className="flex items-center gap-1 text-xs text-amber-600 font-semibold mb-1"><Pin size={10} />Pinned</span>}
                   <p className="font-semibold text-sm text-gray-900 line-clamp-1">{a.title}</p>
                   <p className="text-sm text-gray-500 mt-1 line-clamp-2">{a.content}</p>
@@ -148,15 +158,20 @@ export default function DashboardPage() {
             <Link href="/dashboard/events" className="text-xs text-[#1B5E20] font-semibold flex items-center">See all <ChevronRight size={14} /></Link>
           </div>
           {events.length === 0 ? (
-            <p className="text-gray-400 text-sm text-center py-4">No upcoming events</p>
+            <div className="text-center py-6 bg-white rounded-xl border border-dashed border-gray-200 text-sm text-gray-400">
+              No upcoming events
+            </div>
           ) : (
             <div className="space-y-2">
               {events.map((e) => (
-                <div key={e.id} className="bg-white rounded-xl p-4 shadow-sm">
+                <div key={e.id} className="bg-white rounded-xl p-4 border border-gray-200 hover:shadow-sm transition-shadow">
                   <p className="font-semibold text-sm text-gray-900">{e.title}</p>
-                  <div className="flex gap-4 mt-2">
-                    <span className="text-xs text-gray-500">{format(new Date(e.date), 'dd MMM')} · {e.time}</span>
-                    <span className="text-xs text-gray-500">{e.location}</span>
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-xs text-gray-500">
+                    <span className="inline-flex items-center gap-1.5">
+                      <Calendar size={12} className="text-gray-400" />
+                      {format(new Date(e.date), 'dd MMM')} &middot; {e.time}
+                    </span>
+                    {e.location && <span>{e.location}</span>}
                   </div>
                 </div>
               ))}

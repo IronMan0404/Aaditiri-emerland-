@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { Plus, Clock, MapPin, AlertTriangle, Ban, Lock, Edit3, Trash2 } from 'lucide-react';
+import { Plus, Clock, Calendar, AlertTriangle, Ban, Lock, Edit3, Trash2, CalendarDays, Bookmark, CheckCircle2, XCircle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { createClient } from '@/lib/supabase';
 import { useAuth } from '@/hooks/useAuth';
@@ -279,9 +279,18 @@ export default function BookingsPage() {
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-6">
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-bold text-gray-900">Bookings</h1>
-        <Button onClick={() => setOpen(true)} size="sm"><Plus size={16} />Book</Button>
+      <div className="flex items-start justify-between gap-3 mb-5">
+        <div>
+          <div className="flex items-center gap-2">
+            <Bookmark size={22} className="text-[#1B5E20]" />
+            <h1 className="text-2xl font-bold text-gray-900">Bookings</h1>
+          </div>
+          <p className="text-sm text-gray-500 mt-1">Reserve a clubhouse facility &amp; track your requests.</p>
+        </div>
+        <Button onClick={() => setOpen(true)} size="sm" className="flex-shrink-0">
+          <Plus size={16} className="mr-1" />
+          Book
+        </Button>
       </div>
 
       {isAdmin && (
@@ -295,65 +304,106 @@ export default function BookingsPage() {
       )}
 
       {loading ? (
-        <div className="space-y-3">{[1,2,3].map(i => <div key={i} className="h-28 bg-gray-100 rounded-xl animate-pulse" />)}</div>
+        <div className="space-y-3">{[1,2,3].map(i => <div key={i} className="h-32 bg-gray-100 rounded-xl animate-pulse" />)}</div>
       ) : bookings.length === 0 ? (
-        <p className="text-center text-gray-400 py-12">No bookings found</p>
+        <div className="text-center py-16 bg-white rounded-xl border border-dashed border-gray-300">
+          <Bookmark className="mx-auto text-gray-300 mb-3" size={36} />
+          <p className="text-sm text-gray-500">No bookings yet. Tap &quot;Book&quot; to reserve a facility.</p>
+        </div>
       ) : (
         <div className="space-y-3">
           {bookings.map((b) => (
-            <div key={b.id} className="bg-white rounded-xl p-4 shadow-sm">
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 mb-1">
-                    <h3 className="font-bold text-gray-900">{b.facility}</h3>
-                    <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${STATUS[b.status]}`}>{b.status.toUpperCase()}</span>
-                  </div>
-                  {isAdmin && <p className="text-xs text-gray-500">{(b.profiles as any)?.full_name} · Flat {(b.profiles as any)?.flat_number}</p>}
-                  <div className="flex gap-4 mt-2">
-                    <span className="flex items-center gap-1 text-xs text-gray-500"><MapPin size={11} />{format(new Date(b.date), 'dd MMM yyyy')}</span>
-                    <span className="flex items-center gap-1 text-xs text-gray-500"><Clock size={11} />{b.time_slot}</span>
-                  </div>
-                  {b.notes && <p className="text-xs text-gray-400 mt-1 italic whitespace-pre-wrap">{b.notes}</p>}
-                  <div className="flex flex-wrap gap-2 mt-3">
-                    {isAdmin && b.status === 'pending' && (
-                      <>
-                        <button onClick={() => approveBooking(b.id)} className="px-3 py-1 bg-green-100 text-green-700 text-xs font-semibold rounded-lg hover:bg-green-200 transition-colors">Approve</button>
-                        <button onClick={() => openAdminAction(b, 'reject')} className="px-3 py-1 bg-red-100 text-red-700 text-xs font-semibold rounded-lg hover:bg-red-200 transition-colors">Reject</button>
-                      </>
-                    )}
-                    {isAdmin && b.status === 'approved' && (
-                      <>
-                        <button onClick={() => openAdminAction(b, 'revoke')} className="inline-flex items-center gap-1 px-3 py-1 bg-amber-100 text-amber-800 text-xs font-semibold rounded-lg hover:bg-amber-200 transition-colors">
-                          <Ban size={12} />Revoke
-                        </button>
-                        <button onClick={() => openAdminAction(b, 'reject')} className="px-3 py-1 bg-red-100 text-red-700 text-xs font-semibold rounded-lg hover:bg-red-200 transition-colors">Reject</button>
-                      </>
-                    )}
-                    {b.user_id === profile?.id && b.status === 'pending' && (
-                      <button onClick={() => updateStatus(b.id, 'cancelled')} className="px-3 py-1 bg-gray-100 text-gray-600 text-xs font-semibold rounded-lg hover:bg-gray-200 transition-colors">Cancel</button>
-                    )}
-                    {isAdmin && (
-                      <>
-                        <button
-                          onClick={() => openEdit(b)}
-                          title="Edit booking (admin)"
-                          aria-label="Edit booking"
-                          className="inline-flex items-center gap-1 px-3 py-1 bg-gray-100 text-gray-600 text-xs font-semibold rounded-lg hover:bg-gray-200 transition-colors"
-                        >
-                          <Edit3 size={12} />Edit
-                        </button>
-                        <button
-                          onClick={() => openDelete(b)}
-                          title={isPastBooking(b) ? 'Delete past booking' : 'Delete booking'}
-                          aria-label="Delete booking"
-                          className="inline-flex items-center gap-1 px-3 py-1 bg-red-50 text-red-600 text-xs font-semibold rounded-lg hover:bg-red-100 transition-colors"
-                        >
-                          <Trash2 size={12} />Delete
-                        </button>
-                      </>
-                    )}
-                  </div>
+            <div key={b.id} className="bg-white rounded-xl border border-gray-200 p-4 hover:shadow-sm transition-shadow">
+              <div className="flex items-start justify-between gap-3 mb-2">
+                <div className="min-w-0 flex-1">
+                  <h3 className="font-semibold text-gray-900 truncate">{b.facility}</h3>
+                  {isAdmin && (
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      {(b.profiles as any)?.full_name} &middot; Flat {(b.profiles as any)?.flat_number}
+                    </p>
+                  )}
                 </div>
+                <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full whitespace-nowrap flex-shrink-0 ${STATUS[b.status]}`}>
+                  {b.status}
+                </span>
+              </div>
+
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-600">
+                <span className="inline-flex items-center gap-1.5">
+                  <Calendar size={13} className="text-gray-400" />
+                  {format(new Date(b.date), 'dd MMM yyyy')}
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <Clock size={13} className="text-gray-400" />
+                  {b.time_slot}
+                </span>
+              </div>
+
+              {b.notes && (
+                <p className="text-xs text-gray-500 mt-2 italic whitespace-pre-wrap leading-relaxed">{b.notes}</p>
+              )}
+
+              <div className="flex flex-wrap items-center gap-1.5 mt-3 pt-3 border-t border-gray-100">
+                {isAdmin && b.status === 'pending' && (
+                  <>
+                    <button onClick={() => approveBooking(b.id)} className="inline-flex items-center gap-1 px-3 py-1.5 bg-green-100 text-green-700 text-xs font-semibold rounded-lg hover:bg-green-200 transition-colors">
+                      <CheckCircle2 size={13} />Approve
+                    </button>
+                    <button onClick={() => openAdminAction(b, 'reject')} className="inline-flex items-center gap-1 px-3 py-1.5 bg-red-100 text-red-700 text-xs font-semibold rounded-lg hover:bg-red-200 transition-colors">
+                      <XCircle size={13} />Reject
+                    </button>
+                  </>
+                )}
+                {isAdmin && b.status === 'approved' && (
+                  <>
+                    <button onClick={() => openAdminAction(b, 'revoke')} className="inline-flex items-center gap-1 px-3 py-1.5 bg-amber-100 text-amber-800 text-xs font-semibold rounded-lg hover:bg-amber-200 transition-colors">
+                      <Ban size={13} />Revoke
+                    </button>
+                    <button onClick={() => openAdminAction(b, 'reject')} className="inline-flex items-center gap-1 px-3 py-1.5 bg-red-100 text-red-700 text-xs font-semibold rounded-lg hover:bg-red-200 transition-colors">
+                      <XCircle size={13} />Reject
+                    </button>
+                  </>
+                )}
+                {b.user_id === profile?.id && b.status === 'pending' && (
+                  <button onClick={() => updateStatus(b.id, 'cancelled')} className="inline-flex items-center gap-1 px-3 py-1.5 bg-gray-100 text-gray-600 text-xs font-semibold rounded-lg hover:bg-gray-200 transition-colors">
+                    <XCircle size={13} />Cancel
+                  </button>
+                )}
+                {b.user_id === profile?.id && (b.status === 'pending' || b.status === 'approved') && (
+                  <a
+                    href={`/api/bookings/${b.id}/ics`}
+                    download
+                    className="inline-flex items-center gap-1 px-3 py-1.5 bg-blue-50 text-blue-700 text-xs font-semibold rounded-lg hover:bg-blue-100 transition-colors"
+                    title="Download as a .ics file you can add to any calendar app"
+                  >
+                    <CalendarDays size={13} />Add to calendar
+                  </a>
+                )}
+                {isAdmin && (
+                  <>
+                    {/* Push edit/delete to the right on wider screens so they
+                        don't elbow the contextual approve/reject actions. */}
+                    <span className="flex-1" />
+                    <button
+                      onClick={() => openEdit(b)}
+                      title="Edit booking (admin)"
+                      aria-label="Edit booking"
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-gray-50 text-gray-600 text-xs font-semibold rounded-lg hover:bg-gray-100 transition-colors"
+                    >
+                      <Edit3 size={13} />
+                      <span className="hidden sm:inline">Edit</span>
+                    </button>
+                    <button
+                      onClick={() => openDelete(b)}
+                      title={isPastBooking(b) ? 'Delete past booking' : 'Delete booking'}
+                      aria-label="Delete booking"
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-red-50 text-red-600 text-xs font-semibold rounded-lg hover:bg-red-100 transition-colors"
+                    >
+                      <Trash2 size={13} />
+                      <span className="hidden sm:inline">Delete</span>
+                    </button>
+                  </>
+                )}
               </div>
             </div>
           ))}

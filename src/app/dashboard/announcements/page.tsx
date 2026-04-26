@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { Plus, Pin, Trash2 } from 'lucide-react';
+import { Plus, Pin, Trash2, Megaphone } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { createClient } from '@/lib/supabase';
 import { useAuth } from '@/hooks/useAuth';
@@ -67,31 +67,49 @@ export default function AnnouncementsPage() {
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-6">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Announcements</h1>
-        {isAdmin && <Button onClick={() => setOpen(true)} size="sm"><Plus size={16} />New</Button>}
+      <div className="flex items-start justify-between gap-3 mb-5">
+        <div>
+          <div className="flex items-center gap-2">
+            <Megaphone size={22} className="text-[#1B5E20]" />
+            <h1 className="text-2xl font-bold text-gray-900">Announcements</h1>
+          </div>
+          <p className="text-sm text-gray-500 mt-1">Society-wide updates from your management team.</p>
+        </div>
+        {isAdmin && (
+          <Button onClick={() => setOpen(true)} size="sm" className="flex-shrink-0">
+            <Plus size={16} className="mr-1" />New
+          </Button>
+        )}
       </div>
 
       {loading ? (
         <div className="space-y-3">{[1,2,3].map(i => <div key={i} className="h-28 bg-gray-100 rounded-xl animate-pulse" />)}</div>
       ) : items.length === 0 ? (
-        <p className="text-center text-gray-400 py-12">No announcements yet</p>
+        <div className="text-center py-16 bg-white rounded-xl border border-dashed border-gray-300">
+          <Megaphone className="mx-auto text-gray-300 mb-3" size={36} />
+          <p className="text-sm text-gray-500">No announcements yet.</p>
+        </div>
       ) : (
         <div className="space-y-3">
           {items.map((a) => (
-            <div key={a.id} className={`bg-white rounded-xl p-4 shadow-sm ${a.is_pinned ? 'border-l-4 border-yellow-400' : ''}`}>
+            <div key={a.id} className={`bg-white rounded-xl border border-gray-200 p-4 hover:shadow-sm transition-shadow ${a.is_pinned ? 'border-l-4 border-l-yellow-400' : ''}`}>
               <div className="flex items-start justify-between gap-3">
-                <div className="flex-1">
-                  {a.is_pinned && <span className="flex items-center gap-1 text-xs text-amber-600 font-bold mb-1"><Pin size={10} />Pinned</span>}
-                  <h3 className="font-bold text-gray-900">{a.title}</h3>
-                  <p className="text-sm text-gray-600 mt-1 leading-relaxed">{a.content}</p>
-                  <div className="flex items-center gap-3 mt-3">
-                    <span className="text-xs text-[#1B5E20] font-semibold">{(a.profiles as any)?.full_name || 'Admin'}</span>
-                    <span className="text-xs text-gray-400">{format(new Date(a.created_at), 'dd MMM yyyy')}</span>
+                <div className="flex-1 min-w-0">
+                  {a.is_pinned && <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-amber-600 mb-1"><Pin size={10} />Pinned</span>}
+                  <h3 className="font-semibold text-gray-900">{a.title}</h3>
+                  <p className="text-sm text-gray-600 mt-1 leading-relaxed whitespace-pre-wrap">{a.content}</p>
+                  <div className="flex items-center gap-3 mt-3 text-xs">
+                    <span className="text-[#1B5E20] font-semibold">{(a.profiles as any)?.full_name || 'Admin'}</span>
+                    <span className="text-gray-400">{format(new Date(a.created_at), 'dd MMM yyyy')}</span>
                   </div>
                 </div>
                 {isAdmin && (
-                  <button onClick={() => handleDelete(a.id)} className="text-gray-300 hover:text-red-500 transition-colors mt-1">
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(a.id)}
+                    className="text-gray-300 hover:text-red-500 transition-colors mt-0.5 p-1 -m-1"
+                    aria-label="Delete announcement"
+                  >
                     <Trash2 size={16} />
                   </button>
                 )}

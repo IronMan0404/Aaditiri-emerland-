@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
 import { createAdminSupabaseClient, isAdminClientConfigured } from '@/lib/supabase-admin';
 import { notifyAfter } from '@/lib/notify';
+import { mailBookingInviteAfter } from '@/lib/booking-email';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -49,12 +50,14 @@ export async function POST(req: Request) {
   const user = authRes?.user;
   if (!user) return NextResponse.json({ error: 'Not signed in' }, { status: 401 });
 
-  // We pull `full_name` and `phone` here too so the admin Telegram
-  // / push notification can show "who's asking" (Flat 413 \u00b7 Bhargava
-  // \u00b7 +91…) without forcing the admin to open the app to triage.
+  // We pull `full_name`, `phone`, and `email` here too so:
+  //   - admin Telegram/push can show "who's asking" (Flat 413 \u00b7
+  //     Bhargava \u00b7 +91…) without forcing the admin to open the app;
+  //   - the booking-confirmation email + tentative ICS can be sent
+  //     to the requester immediately on submit.
   const { data: profile } = await supabase
     .from('profiles')
-    .select('id, flat_number, full_name, phone')
+    .select('id, flat_number, full_name, phone, email')
     .eq('id', user.id)
     .single();
   if (!profile) return NextResponse.json({ error: 'Profile not found' }, { status: 404 });
@@ -154,6 +157,25 @@ export async function POST(req: Request) {
     requesterFlat: profile.flat_number ?? null,
     requesterPhone: profile.phone ?? null,
     notes: body.notes ?? null,
+  });
+
+  // Mail the resident a "booking received" email with a TENTATIVE
+  // ICS attached. Their calendar will hold the slot pending admin
+  // approval; on approve we send a CONFIRMED update with the same
+  // UID so the entry transitions in place. On reject we send a
+  // CANCEL so it disappears from their calendar instead of staying
+  // tentative forever. Email is best-effort: if Brevo isn't
+  // configured the booking still succeeds.
+  const origin = req.headers.get('origin') || new URL(req.url).origin;
+  mailBookingInviteAfter({
+    phase: 'submit',
+    origin,
+    bookingId: inserted.id,
+    facility: facility.name,
+    date: body.date,
+    timeSlot: body.time_slot,
+    notes: body.notes ?? null,
+    resident: { name: profile.full_name ?? null, email: profile.email ?? null },
   });
 
   return NextResponse.json({ ok: true, id: inserted.id });

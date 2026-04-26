@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { Plus, MapPin, Clock, Users, Trash2, Check, HelpCircle, X } from 'lucide-react';
+import { Plus, MapPin, Clock, Calendar, Users, Trash2, Check, HelpCircle, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { createClient } from '@/lib/supabase';
 import { useAuth } from '@/hooks/useAuth';
@@ -174,15 +174,28 @@ export default function EventsPage() {
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-6">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Events</h1>
-        {isAdmin && <Button onClick={() => setOpen(true)} size="sm"><Plus size={16} />Create Event</Button>}
+      <div className="flex items-start justify-between gap-3 mb-5">
+        <div>
+          <div className="flex items-center gap-2">
+            <Calendar size={22} className="text-[#1B5E20]" />
+            <h1 className="text-2xl font-bold text-gray-900">Events</h1>
+          </div>
+          <p className="text-sm text-gray-500 mt-1">RSVP to upcoming community events.</p>
+        </div>
+        {isAdmin && (
+          <Button onClick={() => setOpen(true)} size="sm" className="flex-shrink-0">
+            <Plus size={16} className="mr-1" />Create
+          </Button>
+        )}
       </div>
 
       {loading ? (
         <div className="space-y-3">{[1,2,3].map(i => <div key={i} className="h-36 bg-gray-100 rounded-xl animate-pulse" />)}</div>
       ) : events.length === 0 ? (
-        <p className="text-center text-gray-400 py-12">No events scheduled</p>
+        <div className="text-center py-16 bg-white rounded-xl border border-dashed border-gray-300">
+          <Calendar className="mx-auto text-gray-300 mb-3" size={36} />
+          <p className="text-sm text-gray-500">No events scheduled.</p>
+        </div>
       ) : (
         <div className="space-y-3">
           {events.map((ev) => {
@@ -193,18 +206,33 @@ export default function EventsPage() {
             const maybeCount = rsvps.filter((r) => r.status === 'maybe').length;
             const isPast = new Date(ev.date) < new Date();
             return (
-              <div key={ev.id} className={`bg-white rounded-xl p-4 shadow-sm ${isPast ? 'opacity-60' : ''}`}>
+              <div key={ev.id} className={`bg-white rounded-xl p-4 border border-gray-200 hover:shadow-sm transition-shadow ${isPast ? 'opacity-70' : ''}`}>
                 <div className="flex items-start justify-between gap-3">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <h3 className="font-bold text-gray-900">{ev.title}</h3>
-                      {isPast && <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">Past</span>}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h3 className="font-semibold text-gray-900">{ev.title}</h3>
+                      {isPast && <span className="text-[10px] font-bold uppercase tracking-wider bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">Past</span>}
                     </div>
                     {ev.description && <p className="text-sm text-gray-500 mt-1 line-clamp-2">{ev.description}</p>}
-                    <div className="grid grid-cols-2 gap-y-1 mt-3">
-                      <span className="flex items-center gap-1.5 text-xs text-gray-500"><Clock size={12} />{format(new Date(ev.date), 'dd MMM yyyy')} · {ev.time}</span>
-                      <span className="flex items-center gap-1.5 text-xs text-gray-500"><MapPin size={12} />{ev.location}</span>
-                      <span className="flex items-center gap-1.5 text-xs text-gray-500"><Users size={12} />{goingCount} going{maybeCount ? ` · ${maybeCount} maybe` : ''}{ev.max_attendees ? ` / ${ev.max_attendees}` : ''}</span>
+                    <div className="flex flex-wrap gap-x-4 gap-y-1 mt-3 text-xs text-gray-600">
+                      <span className="inline-flex items-center gap-1.5">
+                        <Calendar size={13} className="text-gray-400" />
+                        {format(new Date(ev.date), 'dd MMM yyyy')}
+                      </span>
+                      <span className="inline-flex items-center gap-1.5">
+                        <Clock size={13} className="text-gray-400" />
+                        {ev.time}
+                      </span>
+                      {ev.location && (
+                        <span className="inline-flex items-center gap-1.5">
+                          <MapPin size={13} className="text-gray-400" />
+                          {ev.location}
+                        </span>
+                      )}
+                      <span className="inline-flex items-center gap-1.5">
+                        <Users size={13} className="text-gray-400" />
+                        {goingCount} going{maybeCount ? ` · ${maybeCount} maybe` : ''}{ev.max_attendees ? ` / ${ev.max_attendees}` : ''}
+                      </span>
                     </div>
                     {!isPast && (
                       <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label="RSVP">

@@ -5,6 +5,7 @@ import {
   handleCallbackQuery,
   finalisePendingReject,
 } from '@/lib/channels/telegram-actions';
+import { computeFlatDues, formatPaiseAsRupees } from '@/lib/dues';
 
 // ============================================================
 // Telegram bot webhook.
@@ -27,8 +28,21 @@ import {
 //      MarkdownV2 (with everything dynamic ESCAPED) so a hostile
 //      pairing code can't inject markup.
 //
-// Two-way commands like /dues and /issue land in Step 4 — for now
-// the webhook simply tells the user the command is coming soon.
+// Two-way commands:
+//
+//   /dues           show the calling resident's pending dues
+//                   across active collecting funds (their own flat
+//                   only — never another resident's).
+//
+//   /issue          start a 2-step ticket-creation flow. The bot
+//                   prompts for a title; the next non-/cancel
+//                   message becomes the issue title. We park the
+//                   "awaiting title" state in telegram_pending_actions
+//                   keyed by chat_id, the same table the reject flow
+//                   uses, with a distinct action prefix so the two
+//                   flows can't collide.
+//
+//   /cancel         clear any pending two-step state for this chat.
 //
 // IMPORTANT: this endpoint must always return 200 OK, even on
 // failure. Telegram retries non-2xx responses for hours, which
@@ -227,13 +241,277 @@ async function handleHelp(chatId: number): Promise<void> {
     [
       '*Available commands*',
       '',
-      '/start    — link this chat to your resident profile',
-      '/help     — show this list',
+      '/start \\<code\\> — link this chat to your resident profile',
+      '/help — show this list',
+      '/dues — your pending society dues',
+      '/issue — raise a maintenance ticket',
+      '/cancel — abort the current /issue or /reject step',
       '/disconnect — unlink this chat',
-      '',
-      '_More commands \\(/dues, /issue\\) coming soon\\._',
     ].join('\n'),
   );
+}
+
+// ============================================================
+// Resident lookup (chat_id → linked profile)
+// ============================================================
+//
+// Used by /dues and /issue. Unlike resolveActingAdmin (which is
+// strict about role='admin'), this resolver returns ANY approved
+// non-bot resident linked to the chat. Returns null if the chat
+// is not paired or the profile is not approved.
+
+interface LinkedResident {
+  userId: string;
+  fullName: string;
+  flatNumber: string | null;
+  isApproved: boolean;
+}
+
+async function resolveLinkedResident(chatId: number): Promise<LinkedResident | null> {
+  const adb = createAdminSupabaseClient();
+  const { data: link } = await adb
+    .from('telegram_links')
+    .select('user_id')
+    .eq('chat_id', chatId)
+    .eq('is_active', true)
+    .limit(2)
+    .maybeSingle();
+  if (!link) return null;
+  const { data: profile } = await adb
+    .from('profiles')
+    .select('id, full_name, flat_number, is_approved, is_bot')
+    .eq('id', link.user_id)
+    .maybeSingle();
+  if (!profile || profile.is_bot) return null;
+  return {
+    userId: profile.id,
+    fullName: profile.full_name ?? 'resident',
+    flatNumber: profile.flat_number ?? null,
+    isApproved: profile.is_approved === true,
+  };
+}
+
+async function handleDues(chatId: number): Promise<void> {
+  const me = await resolveLinkedResident(chatId);
+  if (!me) {
+    await reply(
+      chatId,
+      'This chat is not linked\\. Open the app → Profile → *Connect Telegram* to pair, then try /dues again\\.',
+    );
+    return;
+  }
+  if (!me.isApproved) {
+    await reply(
+      chatId,
+      'Your account is still pending admin approval\\. Once you are approved you can check dues here\\.',
+    );
+    return;
+  }
+  if (!me.flatNumber) {
+    await reply(
+      chatId,
+      'Your profile does not have a flat number on file\\. Update it in the app under *Profile* and try again\\.',
+    );
+    return;
+  }
+
+  const summary = await computeFlatDues(me.flatNumber);
+  const safeFlat = escapeMarkdownV2(me.flatNumber);
+  if (!summary) {
+    await reply(
+      chatId,
+      [
+        `*Flat ${safeFlat}* — *no pending dues* ✅`,
+        '',
+        'You are square on every active fund\\. Thank you\\!',
+      ].join('\n'),
+    );
+    return;
+  }
+
+  const lines: string[] = [
+    `*Flat ${safeFlat}* — pending dues`,
+    '',
+  ];
+  for (const l of summary.lines) {
+    lines.push(
+      `• ${escapeMarkdownV2(l.fundName)}: ${escapeMarkdownV2(formatPaiseAsRupees(l.pendingPaise))}`,
+    );
+  }
+  lines.push('');
+  lines.push(
+    `*Total outstanding:* ${escapeMarkdownV2(formatPaiseAsRupees(summary.totalPendingPaise))} across ${summary.lines.length} fund${summary.lines.length === 1 ? '' : 's'}`,
+  );
+  lines.push('');
+  lines.push('_Pay offline to your treasurer; entries are reflected after admin marks them received\\._');
+  await reply(chatId, lines.join('\n'));
+}
+
+// ============================================================
+// /issue — two-step ticket creation
+// ============================================================
+//
+// Flow:
+//   1. Resident sends /issue.
+//      → We upsert a telegram_pending_actions row with
+//        action = 'issue:awaiting_title:<userId>'.
+//      → Bot replies "Send a short title…".
+//
+//   2. Resident sends free text on the same chat.
+//      → handleMessage's free-text branch first asks finalisePendingReject
+//        (unrelated reject flow) — that returns false because our action
+//        prefix is 'issue:', not '<resource>:reject:'.
+//      → Then we call finalisePendingIssue, which inserts an
+//        issues row using the service-role client (the resident has
+//        no browser session here) and clears the pending row.
+//
+//   3. /cancel at any point clears the pending row.
+
+async function startIssue(chatId: number): Promise<void> {
+  const me = await resolveLinkedResident(chatId);
+  if (!me) {
+    await reply(
+      chatId,
+      'This chat is not linked\\. Open the app → Profile → *Connect Telegram* to pair, then try /issue again\\.',
+    );
+    return;
+  }
+  if (!me.isApproved) {
+    await reply(
+      chatId,
+      'Your account is still pending admin approval\\. Once approved you can raise tickets from here or in the app\\.',
+    );
+    return;
+  }
+
+  // Park "awaiting title" state. We re-use telegram_pending_actions —
+  // the existing reject flow only matches actions of shape
+  // "<resource>:reject:<uuid>", so an "issue:awaiting_title:<userId>"
+  // row will not be picked up by finalisePendingReject. The chat_id
+  // primary key means a fresh /issue overwrites any stale state.
+  const adb = createAdminSupabaseClient();
+  await adb.from('telegram_pending_actions').upsert(
+    {
+      chat_id: chatId,
+      user_id: me.userId,
+      action: `issue:awaiting_title:${me.userId}`,
+      created_at: new Date().toISOString(),
+      origin_chat_id: chatId,
+      origin_message_id: null,
+    },
+    { onConflict: 'chat_id' },
+  );
+
+  await reply(
+    chatId,
+    [
+      '*Raise a new ticket*',
+      '',
+      'Send a short *title* describing the problem \\(one message, max 200 chars\\)\\. Examples:',
+      '• Lift not working in C wing',
+      '• Water leakage in basement',
+      '',
+      'Send /cancel to abort\\.',
+    ].join('\n'),
+  );
+}
+
+async function handleCancel(chatId: number): Promise<void> {
+  const adb = createAdminSupabaseClient();
+  const { data } = await adb
+    .from('telegram_pending_actions')
+    .delete()
+    .eq('chat_id', chatId)
+    .select('action');
+  if (!data || data.length === 0) {
+    await reply(chatId, 'Nothing to cancel\\.');
+    return;
+  }
+  await reply(chatId, 'Cancelled\\.');
+}
+
+const ISSUE_TTL_MS = 10 * 60 * 1000;
+
+/**
+ * Returns true if the message was consumed as the title for a
+ * pending /issue. Should be called BEFORE the unknown-text fallback
+ * but AFTER finalisePendingReject (which has its own prefix).
+ */
+async function finalisePendingIssue(chatId: number, text: string): Promise<boolean> {
+  const adb = createAdminSupabaseClient();
+  const { data: pending } = await adb
+    .from('telegram_pending_actions')
+    .select('chat_id, user_id, action, created_at')
+    .eq('chat_id', chatId)
+    .maybeSingle();
+  if (!pending) return false;
+  const action = pending.action as string;
+  if (!action.startsWith('issue:awaiting_title:')) return false;
+
+  // TTL check.
+  const ageMs = Date.now() - new Date(pending.created_at as string).getTime();
+  if (ageMs > ISSUE_TTL_MS) {
+    await adb.from('telegram_pending_actions').delete().eq('chat_id', chatId);
+    await reply(chatId, '_Your /issue prompt expired \\(>10 min\\)\\. Send /issue again to start over\\._');
+    return true;
+  }
+
+  // Re-confirm the resident is still approved (defence in depth).
+  const me = await resolveLinkedResident(chatId);
+  if (!me || !me.isApproved || me.userId !== pending.user_id) {
+    await adb.from('telegram_pending_actions').delete().eq('chat_id', chatId);
+    await reply(chatId, 'Your account is no longer eligible to raise tickets\\.');
+    return true;
+  }
+
+  const title = text.trim().slice(0, 200);
+  if (title.length < 3) {
+    await reply(chatId, 'That title is too short \\(minimum 3 characters\\)\\. Send a longer one or /cancel\\.');
+    return true;
+  }
+
+  // Insert the issue row. category and description default to "other"
+  // and the title (issues.description NOT NULL) — admins can edit the
+  // ticket on the board if needed. We snapshot flat_number from the
+  // resident's profile so admin filters keep working even if they
+  // later move out.
+  const description = `Raised via Telegram by ${me.fullName}.`;
+  const { data: inserted, error } = await adb
+    .from('issues')
+    .insert({
+      created_by: me.userId,
+      title,
+      description,
+      category: 'other',
+      priority: 'normal',
+      status: 'todo',
+      flat_number: me.flatNumber,
+    })
+    .select('id')
+    .maybeSingle();
+
+  // Clear the pending row regardless of insert outcome — we don't want
+  // a stuck state.
+  await adb.from('telegram_pending_actions').delete().eq('chat_id', chatId);
+
+  if (error || !inserted) {
+    console.error('[telegram-webhook] /issue insert failed', error);
+    await reply(chatId, 'Could not raise the ticket right now\\. Try again in a minute or use the app\\.');
+    return true;
+  }
+
+  await reply(
+    chatId,
+    [
+      '*Ticket raised* ✅',
+      '',
+      `Title: ${escapeMarkdownV2(title)}`,
+      'Status: *todo*',
+      '',
+      'You will get a Telegram notification when an admin updates the status\\. To add details or photos, open the ticket in the app under *Issues*\\.',
+    ].join('\n'),
+  );
+  return true;
 }
 
 async function handleDisconnect(chatId: number): Promise<void> {
@@ -291,8 +569,13 @@ async function handleMessage(message: TgMessage): Promise<void> {
         await handleDisconnect(message.chat.id);
         return;
       case 'dues':
+        await handleDues(message.chat.id);
+        return;
       case 'issue':
-        await reply(message.chat.id, '_That command is coming soon\\._');
+        await startIssue(message.chat.id);
+        return;
+      case 'cancel':
+        await handleCancel(message.chat.id);
         return;
       default:
         await reply(message.chat.id, 'Unknown command\\. Type /help to see what I can do\\.');
@@ -300,13 +583,22 @@ async function handleMessage(message: TgMessage): Promise<void> {
     }
   }
 
-  // Free text — first check whether this admin tapped Reject on a
-  // notification recently and is now sending the rejection reason.
-  // If so, finalisePendingReject consumes the message and we stop.
-  const consumed = await finalisePendingReject(message.chat.id, text);
-  if (consumed) return;
+  // Free text — order matters here:
+  //
+  //   1. finalisePendingReject (admin reject reason)
+  //      Only consumes rows whose action matches "<resource>:reject:<uuid>".
+  //
+  //   2. finalisePendingIssue (resident /issue title)
+  //      Only consumes rows whose action starts with "issue:awaiting_title:".
+  //
+  // The two flows can never collide because their action prefixes are
+  // disjoint. If neither claims the message we fall through to a nudge.
+  const consumedReject = await finalisePendingReject(message.chat.id, text);
+  if (consumedReject) return;
 
-  // Otherwise, gentle nudge.
+  const consumedIssue = await finalisePendingIssue(message.chat.id, text);
+  if (consumedIssue) return;
+
   await reply(message.chat.id, 'I only understand commands right now\\. Try /help\\.');
 }
 

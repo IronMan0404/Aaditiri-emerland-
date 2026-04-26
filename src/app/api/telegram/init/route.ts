@@ -132,6 +132,9 @@ export async function POST(req: Request): Promise<NextResponse> {
     commands: [
       { command: 'start', description: 'Link this chat with your resident account' },
       { command: 'help', description: 'Show available commands' },
+      { command: 'dues', description: 'Show your pending society dues' },
+      { command: 'issue', description: 'Raise a maintenance ticket' },
+      { command: 'cancel', description: 'Abort the current step' },
       { command: 'disconnect', description: 'Unlink this chat' },
     ],
   });

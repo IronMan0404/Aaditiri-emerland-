@@ -50,11 +50,26 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Broadcast not found' }, { status: 404 });
   }
 
+  // Resolve the sender's display name so residents see "From <Name>"
+  // attribution in both push and Telegram. Best-effort — if the
+  // creator's profile was deleted, the renderer falls back to a
+  // generic "Aaditri Emerland Admin" label.
+  let senderName: string | null = null;
+  if (bc.created_by) {
+    const { data: senderProfile } = await supabase
+      .from('profiles')
+      .select('full_name')
+      .eq('id', bc.created_by)
+      .maybeSingle();
+    senderName = senderProfile?.full_name ?? null;
+  }
+
   const result = await notify('broadcast_sent', bc.id, {
     broadcastId: bc.id,
     title: bc.title,
     body: bc.message,
     authoredById: bc.created_by ?? null,
+    senderName,
   });
 
   return NextResponse.json({

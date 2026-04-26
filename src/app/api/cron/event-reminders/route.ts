@@ -17,7 +17,7 @@ import { notify } from '@/lib/notify';
 // CRON_SECRET is set in env, so we verify that header to keep the endpoint
 // safe from random callers.
 //
-// Each invocation runs three independent passes:
+// Each invocation runs four independent passes:
 //
 //   1. Event reminders — finds events scheduled for the local "tomorrow"
 //      (next 24-48h window), loads everyone who RSVP'd "going" or "maybe",
@@ -37,7 +37,14 @@ import { notify } from '@/lib/notify';
 //      clubhouse_subscription_notices_sent ledger keeps the cron
 //      idempotent across runs.
 //
-// All three failures are logged but don't abort sibling passes — a
+//   4. Scheduled reminders — dispatches admin-curated rows from
+//      `public.scheduled_reminders` whose `fire_on` is today-or-earlier
+//      and whose `status` is still 'pending'. Status flips to 'sent' on
+//      success or 'failed' on dispatcher error. Idempotency: the status
+//      flip is conditional on `status='pending'` so a concurrent
+//      invocation can't double-fire.
+//
+// All four failures are logged but don't abort sibling passes — a
 // dropped push provider shouldn't stop us from updating subscription
 // statuses.
 //
@@ -86,16 +93,18 @@ export async function GET(request: Request) {
   const admin = createAdminSupabaseClient();
   const pushReady = isPushConfigured();
 
-  const [events, passes, subs] = await Promise.all([
+  const [events, passes, subs, reminders] = await Promise.all([
     runEventReminders(admin),
     runPassExpiry(admin),
     runSubscriptionTransitions(admin),
+    runScheduledReminders(admin),
   ]);
 
   return NextResponse.json({
     events,
     passes,
     subscriptions: subs,
+    scheduled_reminders: reminders,
     push_ready: pushReady,
   });
 }
@@ -285,4 +294,110 @@ async function runSubscriptionTransitions(admin: AdminClient) {
     dispatched_expiring: dispatchedExpiring,
     dispatched_expired: dispatchedExpired,
   };
+}
+
+interface ScheduledReminderCronRow {
+  id: string;
+  title: string;
+  body: string;
+  fire_on: string;
+  created_by: string | null;
+}
+
+// Today's date in IST (UTC+5:30). The cron itself runs at 03:30 UTC
+// = 09:00 IST so "today in IST" is well-defined for any invocation
+// that lands inside the same wall-clock day. We add the offset
+// explicitly rather than assuming the runtime's TZ.
+function istTodayDate(): string {
+  const nowMs = Date.now();
+  const istMs = nowMs + (5 * 60 + 30) * 60 * 1000;
+  return new Date(istMs).toISOString().slice(0, 10);
+}
+
+async function runScheduledReminders(admin: AdminClient) {
+  const todayIst = istTodayDate();
+
+  // Fetch every pending row whose fire date is today-or-earlier.
+  // "earlier" lets us catch a row that was inserted *after* the
+  // previous cron run (e.g. yesterday at 11pm with fire_on=yesterday)
+  // — we'd rather fire it a few hours late than skip it forever.
+  const { data: rows, error } = await admin
+    .from('scheduled_reminders')
+    .select('id, title, body, fire_on, created_by')
+    .eq('status', 'pending')
+    .lte('fire_on', todayIst)
+    .order('fire_on', { ascending: true });
+
+  if (error) return { error: error.message };
+  const list = (rows ?? []) as ScheduledReminderCronRow[];
+  if (list.length === 0) return { found: 0, dispatched: 0 };
+
+  // Pre-load creator names in one query so we don't hit `profiles`
+  // once per reminder. Filter out nulls (deleted creators) before
+  // querying.
+  const creatorIds = Array.from(
+    new Set(list.map((r) => r.created_by).filter((x): x is string => Boolean(x))),
+  );
+  let nameByCreator = new Map<string, string>();
+  if (creatorIds.length > 0) {
+    const { data: profs } = await admin
+      .from('profiles')
+      .select('id, full_name')
+      .in('id', creatorIds);
+    nameByCreator = new Map(
+      (profs ?? []).map((p: { id: string; full_name: string | null }) => [
+        p.id,
+        p.full_name ?? '',
+      ]),
+    );
+  }
+
+  let dispatched = 0;
+  let failed = 0;
+
+  for (const row of list) {
+    const senderName = row.created_by ? nameByCreator.get(row.created_by) ?? null : null;
+    try {
+      await notify('scheduled_reminder', row.id, {
+        reminderId: row.id,
+        title: row.title,
+        body: row.body,
+        senderName,
+      });
+
+      // Only flip to 'sent' AFTER notify() resolves. If the cron
+      // crashes mid-batch, unprocessed rows stay 'pending' and the
+      // next run picks them up (notify() has its own per-channel
+      // dedup so users don't double-receive).
+      await admin
+        .from('scheduled_reminders')
+        .update({
+          status: 'sent',
+          sent_at: new Date().toISOString(),
+          fired_count: 1,
+          error_message: null,
+        })
+        .eq('id', row.id)
+        .eq('status', 'pending');
+
+      dispatched += 1;
+    } catch (err) {
+      failed += 1;
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('[cron] scheduled reminder failed', row.id, msg);
+      // Park as 'failed' with the error message so the admin UI
+      // can show it. Admins can fire-now to retry.
+      await admin
+        .from('scheduled_reminders')
+        .update({
+          status: 'failed',
+          fired_count: 1,
+          error_message: msg.slice(0, 500),
+        })
+        .eq('id', row.id)
+        .eq('status', 'pending');
+    }
+  }
+
+  return { found: list.length, dispatched, failed };
 }

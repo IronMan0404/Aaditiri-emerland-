@@ -1653,6 +1653,201 @@ comment on table public.telegram_pending_actions is
     'Short-lived per-admin Telegram pending actions awaiting a typed reason. Service-role only.';
 
 -- ============================================================
+-- SCHEDULED REMINDERS (admin-curated, society-wide)
+-- See supabase/migrations/20260506_scheduled_reminders.sql.
+-- ============================================================
+create table if not exists public.scheduled_reminders (
+    id uuid primary key default gen_random_uuid(),
+    kind text not null default 'custom'
+        check (kind in ('custom')),
+    title text not null check (length(trim(title)) between 1 and 120),
+    body  text not null check (length(trim(body))  between 1 and 1500),
+    fire_on date not null,
+    audience text not null default 'all_residents'
+        check (audience in ('all_residents')),
+    status text not null default 'pending'
+        check (status in ('pending', 'sent', 'cancelled', 'failed')),
+    created_by uuid references public.profiles(id) on delete set null,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    sent_at    timestamptz,
+    cancelled_at timestamptz,
+    fired_count integer not null default 0,
+    error_message text,
+    last_actor uuid references public.profiles(id) on delete set null
+);
+
+create index if not exists scheduled_reminders_status_fire_idx
+    on public.scheduled_reminders (status, fire_on);
+create index if not exists scheduled_reminders_created_at_idx
+    on public.scheduled_reminders (created_at desc);
+
+create or replace function public.touch_scheduled_reminders_updated_at()
+returns trigger as $$
+begin
+    new.updated_at := now();
+    return new;
+end;
+$$ language plpgsql;
+
+drop trigger if exists scheduled_reminders_touch_updated_at on public.scheduled_reminders;
+create trigger scheduled_reminders_touch_updated_at
+    before update on public.scheduled_reminders
+    for each row execute function public.touch_scheduled_reminders_updated_at();
+
+alter table public.scheduled_reminders enable row level security;
+
+drop policy if exists "Admins can read scheduled reminders" on public.scheduled_reminders;
+create policy "Admins can read scheduled reminders"
+    on public.scheduled_reminders for select
+    to authenticated
+    using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.role = 'admin'));
+
+drop policy if exists "Admins can insert scheduled reminders" on public.scheduled_reminders;
+create policy "Admins can insert scheduled reminders"
+    on public.scheduled_reminders for insert
+    to authenticated
+    with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.role = 'admin'));
+
+drop policy if exists "Admins can update scheduled reminders" on public.scheduled_reminders;
+create policy "Admins can update scheduled reminders"
+    on public.scheduled_reminders for update
+    to authenticated
+    using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.role = 'admin'))
+    with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.role = 'admin'));
+
+drop policy if exists "Admins can delete scheduled reminders" on public.scheduled_reminders;
+create policy "Admins can delete scheduled reminders"
+    on public.scheduled_reminders for delete
+    to authenticated
+    using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.role = 'admin'));
+
+comment on table public.scheduled_reminders is
+    'Admin-curated society-wide reminders. The daily cron picks up rows where status=pending and fire_on <= today (IST), dispatches via notify(), and flips status to sent/failed.';
+
+-- ============================================================
+-- COMMUNITY SERVICES DIRECTORY (2026-05-07)
+-- See supabase/migrations/20260507_services_directory.sql.
+-- ============================================================
+
+create table if not exists public.services (
+    id uuid primary key default gen_random_uuid(),
+    name        text not null check (length(trim(name)) between 1 and 80),
+    category    text not null check (length(trim(category)) between 1 and 40),
+    description text check (description is null or length(description) <= 500),
+    vendor_name      text check (vendor_name is null or length(trim(vendor_name)) between 1 and 80),
+    vendor_phone     text check (vendor_phone is null or vendor_phone ~ '^[0-9+\-\s()]{6,20}$'),
+    vendor_whatsapp  text check (vendor_whatsapp is null or vendor_whatsapp ~ '^[0-9+\-\s()]{6,20}$'),
+    vendor_email     text check (vendor_email is null or vendor_email ~ '^[^@\s]+@[^@\s]+\.[^@\s]+$'),
+    image_url   text,
+    is_active   boolean not null default true,
+    display_order integer not null default 100,
+    created_by uuid references public.profiles(id) on delete set null,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+);
+
+create index if not exists services_active_order_idx
+    on public.services (is_active, display_order, name);
+create index if not exists services_category_idx
+    on public.services (category);
+
+create or replace function public.touch_services_updated_at()
+returns trigger as $$
+begin
+    new.updated_at := now();
+    return new;
+end;
+$$ language plpgsql;
+
+drop trigger if exists services_touch_updated_at on public.services;
+create trigger services_touch_updated_at
+    before update on public.services
+    for each row execute function public.touch_services_updated_at();
+
+create table if not exists public.service_rates (
+    id uuid primary key default gen_random_uuid(),
+    service_id uuid not null references public.services(id) on delete cascade,
+    label       text not null check (length(trim(label)) between 1 and 60),
+    rate_paise  integer check (rate_paise is null or (rate_paise >= 0 and rate_paise <= 100000000)),
+    unit_label  text check (unit_label is null or length(unit_label) <= 30),
+    note        text check (note is null or length(note) <= 100),
+    display_order integer not null default 100,
+    created_at  timestamptz not null default now()
+);
+
+create index if not exists service_rates_service_idx
+    on public.service_rates (service_id, display_order);
+
+alter table public.services      enable row level security;
+alter table public.service_rates enable row level security;
+
+drop policy if exists "Anyone approved can read active services" on public.services;
+create policy "Anyone approved can read active services"
+    on public.services for select
+    to authenticated
+    using (
+        is_active = true
+        or exists (
+            select 1 from public.profiles p
+            where p.id = auth.uid() and p.role = 'admin'
+        )
+    );
+
+drop policy if exists "Anyone approved can read service rates" on public.service_rates;
+create policy "Anyone approved can read service rates"
+    on public.service_rates for select
+    to authenticated
+    using (
+        exists (
+            select 1 from public.services s
+            where s.id = service_id
+              and (
+                  s.is_active = true
+                  or exists (
+                      select 1 from public.profiles p
+                      where p.id = auth.uid() and p.role = 'admin'
+                  )
+              )
+        )
+    );
+
+drop policy if exists "Admins can manage services" on public.services;
+create policy "Admins can manage services"
+    on public.services for all
+    to authenticated
+    using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.role = 'admin'))
+    with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.role = 'admin'));
+
+drop policy if exists "Admins can manage service rates" on public.service_rates;
+create policy "Admins can manage service rates"
+    on public.service_rates for all
+    to authenticated
+    using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.role = 'admin'))
+    with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.role = 'admin'));
+
+comment on table public.services is
+    'Community services directory. Admin-curated cards with vendor contact + variable-shape rate lines (see service_rates).';
+comment on table public.service_rates is
+    'Per-service rate lines. Each row is one priced item (e.g. "Shirt — ₹10", "Single path — ₹5/garment").';
+
+-- ============================================================
+-- PHONE LOGIN UNIQUENESS (2026-05-08)
+-- See supabase/migrations/20260508_phone_login.sql.
+--
+-- Activate Supabase's Phone auth provider in the dashboard before
+-- this constraint actually does any work (the app writes
+-- profiles.phone whether phone-login is enabled or not).
+-- ============================================================
+
+create unique index if not exists profiles_phone_unique_idx
+    on public.profiles (phone)
+    where phone is not null;
+
+comment on index public.profiles_phone_unique_idx is
+    'Phone-as-login-identifier: must be globally unique. Partial index ignores legacy NULLs.';
+
+-- ============================================================
 -- REFRESH POSTGREST SCHEMA CACHE
 -- Tells Supabase's REST layer to reload column/table metadata
 -- so clients stop seeing "Could not find the 'X' column of 'Y'

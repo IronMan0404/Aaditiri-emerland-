@@ -214,12 +214,17 @@ export default function IssuesPage() {
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-6">
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-start justify-between gap-3 mb-5">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">My Issues</h1>
-          <p className="text-xs text-gray-500 mt-0.5">Raise and track community service requests</p>
+          <div className="flex items-center gap-2">
+            <AlertTriangle size={22} className="text-[#1B5E20]" />
+            <h1 className="text-2xl font-bold text-gray-900">My Issues</h1>
+          </div>
+          <p className="text-sm text-gray-500 mt-1">Raise and track community service requests.</p>
         </div>
-        <Button onClick={() => setCreateOpen(true)} size="sm"><Plus size={16} />Raise</Button>
+        <Button onClick={() => setCreateOpen(true)} size="sm" className="flex-shrink-0">
+          <Plus size={16} className="mr-1" />Raise
+        </Button>
       </div>
 
       {loading ? (
@@ -227,10 +232,10 @@ export default function IssuesPage() {
           {[1, 2, 3].map((i) => <div key={i} className="h-24 bg-gray-100 rounded-xl animate-pulse" />)}
         </div>
       ) : issues.length === 0 ? (
-        <div className="text-center py-12">
-          <HelpCircle size={36} className="text-gray-300 mx-auto mb-2" />
-          <p className="text-sm text-gray-400">No issues yet</p>
-          <p className="text-xs text-gray-400 mt-1">Tap &quot;Raise&quot; to report a community problem</p>
+        <div className="text-center py-16 bg-white rounded-xl border border-dashed border-gray-300">
+          <HelpCircle size={36} className="text-gray-300 mx-auto mb-3" />
+          <p className="text-sm text-gray-500">No issues yet.</p>
+          <p className="text-xs text-gray-400 mt-1">Tap &quot;Raise&quot; to report a community problem.</p>
         </div>
       ) : (
         <div className="space-y-3">
@@ -244,18 +249,18 @@ export default function IssuesPage() {
                 key={iss.id}
                 type="button"
                 onClick={() => openIssue(iss)}
-                className="w-full text-left bg-white rounded-xl p-4 shadow-sm hover:shadow transition-shadow"
+                className="w-full text-left bg-white rounded-xl border border-gray-200 p-4 hover:shadow-sm transition-shadow"
               >
                 <div className="flex items-start gap-3">
-                  <span className="w-9 h-9 rounded-lg bg-[#1B5E20]/10 text-[#1B5E20] flex items-center justify-center shrink-0">
-                    <CatIcon size={16} />
+                  <span className="w-10 h-10 rounded-lg bg-[#1B5E20]/10 text-[#1B5E20] flex items-center justify-center shrink-0">
+                    <CatIcon size={18} />
                   </span>
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap mb-0.5">
-                      <h3 className="font-semibold text-gray-900 text-sm truncate">{iss.title}</h3>
-                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${status.pill}`}>{status.label}</span>
+                    <div className="flex items-center gap-1.5 flex-wrap mb-1">
+                      <h3 className="font-semibold text-gray-900 text-sm truncate min-w-0">{iss.title}</h3>
+                      <span className={`text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${status.pill}`}>{status.label}</span>
                       {iss.priority !== 'normal' && (
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${priority.pill}`}>{priority.label}</span>
+                        <span className={`text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${priority.pill}`}>{priority.label}</span>
                       )}
                     </div>
                     <p className="text-xs text-gray-500 line-clamp-2">{iss.description}</p>

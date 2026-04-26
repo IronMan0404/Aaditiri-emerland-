@@ -246,6 +246,15 @@ interface Quote {
   price: number | null; prevClose: number | null;
   changeAbs: number | null; changePct: number | null;
   currency: string; marketState: string;
+  subtitle?: string | null;
+}
+
+function quoteTypeLabel(t: string): string {
+  if (t === 'index') return 'Index';
+  if (t === 'fx') return 'Currency';
+  if (t === 'commodity') return 'Commodity';
+  if (t === 'derived') return 'Derived';
+  return t;
 }
 
 export function MarketsPanel() {
@@ -279,13 +288,20 @@ export function MarketsPanel() {
         {quotes.map((q) => {
           const up = (q.changePct ?? 0) >= 0;
           const Icon = up ? TrendingUp : TrendingDown;
-          const valueStr = q.price === null ? '–' : q.price.toLocaleString('en-IN', { maximumFractionDigits: 2 });
+          // Currency-symbol prefix ("₹" for derived gold) + thousands grouping.
+          const inrPrefix = q.currency === '₹' ? '₹' : '';
+          const valueStr = q.price === null
+            ? '–'
+            : `${inrPrefix}${q.price.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
           return (
             <div key={q.id} className="rounded-xl bg-white border border-gray-200 p-3 sm:p-4 shadow-sm min-w-0">
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0 flex-1">
-                  <p className="text-[9px] sm:text-[10px] uppercase tracking-wider text-gray-500 font-semibold truncate">{q.type === 'index' ? 'Index' : q.type === 'fx' ? 'Currency' : 'Commodity'}</p>
+                  <p className="text-[9px] sm:text-[10px] uppercase tracking-wider text-gray-500 font-semibold truncate">{quoteTypeLabel(q.type)}</p>
                   <p className="text-xs sm:text-sm font-bold text-gray-900 truncate">{q.name}</p>
+                  {q.subtitle && (
+                    <p className="text-[9px] sm:text-[10px] text-gray-400 truncate mt-0.5">{q.subtitle}</p>
+                  )}
                 </div>
                 {q.changePct !== null && (
                   <div className={`flex items-center gap-0.5 text-[10px] sm:text-xs font-bold shrink-0 ${up ? 'text-green-600' : 'text-red-600'}`}>
@@ -302,7 +318,9 @@ export function MarketsPanel() {
           );
         })}
       </div>
-      <p className="text-[10px] text-gray-400 text-center px-2 leading-snug">Quotes from Yahoo Finance · 5-min cache · for information only, not investment advice</p>
+      <p className="text-[10px] text-gray-400 text-center px-2 leading-snug">
+        Stocks &amp; FX from Yahoo · gold ₹/10g derived from spot USD × USD/INR (excludes GST &amp; making charges) · 5-min cache · information only
+      </p>
     </div>
   );
 }
@@ -692,6 +710,18 @@ export function FeedListPanel({ source, category, location, emptyMessage }: Feed
 
   return (
     <div className="space-y-3">
+      {/* Fuel-specific honesty banner. Petrol/diesel city prices have NO
+          free, scraper-friendly, official API in India — IOCL's site is
+          JS-rendered and goodreturns/NDTV block bots. We surface news
+          headlines instead and tell the user why. */}
+      {source === 'fuel' && (
+        <div className="rounded-xl bg-amber-50 border border-amber-200 px-3 py-2.5 text-[11px] sm:text-xs text-amber-900 leading-relaxed">
+          Fuel prices in India are revised daily by oil marketing companies but there is no free, official feed.
+          <br className="hidden sm:block" />
+          Tap a story for today&apos;s confirmed number from a news source.
+        </div>
+      )}
+
       {items.length > 3 && (
         <div className="relative">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />

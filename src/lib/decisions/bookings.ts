@@ -2,6 +2,7 @@ import 'server-only';
 import { createAdminSupabaseClient } from '@/lib/supabase-admin';
 import { logAdminAction } from '@/lib/admin-audit';
 import { notifyAfter } from '@/lib/notify';
+import { mailBookingInviteAfter } from '@/lib/booking-email';
 import type { DecisionActor, DecisionResult } from '@/lib/decisions/registrations';
 
 // ============================================================
@@ -9,11 +10,13 @@ import type { DecisionActor, DecisionResult } from '@/lib/decisions/registration
 //
 // Mirrors the registration / subscription helpers. Both
 // /api/admin/bookings/[id]/approve and the Telegram callback
-// runner go through these. Calendar invite (Brevo email + ICS) is
-// intentionally NOT in here — it's a side effect of the web admin
-// path only. The Telegram path delivers the same DB transition,
-// audit log, and resident notification, just without the email
-// niceties.
+// runner go through these. As of 2026-04-26 the calendar invite
+// email lives here too: a CONFIRMED update on approve and a
+// CANCEL on reject, dispatched via Next's after() so neither path
+// blocks on Brevo. Same UID as the TENTATIVE invite mailed at
+// submit, so calendar apps treat the three messages as a single
+// event whose status transitions over time instead of three
+// duplicates.
 // ============================================================
 
 interface BookingRow {
@@ -23,16 +26,59 @@ interface BookingRow {
   date: string;
   time_slot: string;
   status: string;
+  notes: string | null;
 }
 
-async function readBooking(id: string): Promise<BookingRow | null> {
+interface BookingRowWithRequester extends BookingRow {
+  requester_name:  string | null;
+  requester_email: string | null;
+}
+
+async function readBooking(id: string): Promise<BookingRowWithRequester | null> {
   const admin = createAdminSupabaseClient();
   const { data } = await admin
     .from('bookings')
-    .select('id, user_id, facility, date, time_slot, status')
+    .select(
+      'id, user_id, facility, date, time_slot, status, notes, profiles:user_id(full_name, email)',
+    )
     .eq('id', id)
     .maybeSingle();
-  return (data ?? null) as BookingRow | null;
+  if (!data) return null;
+  const profile = (data as unknown as {
+    profiles?: { full_name?: string | null; email?: string | null } | null;
+  }).profiles;
+  return {
+    id:         data.id,
+    user_id:    data.user_id,
+    facility:   data.facility,
+    date:       data.date,
+    time_slot:  data.time_slot,
+    status:     data.status,
+    notes:      data.notes ?? null,
+    requester_name:  profile?.full_name ?? null,
+    requester_email: profile?.email ?? null,
+  };
+}
+
+function originFromRequest(request: DecisionActor['request']): string {
+  // Telegram callbacks pass `request: undefined` (no inbound HTTP).
+  // Fall back to the public site URL env if available so the email
+  // CTA still links to the deployed app rather than localhost.
+  if (request && 'headers' in request) {
+    const origin = request.headers.get('origin');
+    if (origin) return origin;
+    try {
+      const reqAny = request as unknown as { url?: string };
+      if (reqAny.url) return new URL(reqAny.url).origin;
+    } catch {
+      // ignore
+    }
+  }
+  return (
+    process.env.NEXT_PUBLIC_SITE_URL ??
+    process.env.SITE_URL ??
+    'https://aaditiri-emerland.vercel.app'
+  );
 }
 
 export interface ApproveBookingResult extends DecisionResult {
@@ -88,11 +134,26 @@ export async function approveBooking(
     approved: true,
   });
 
+  // Calendar invite UPDATE — same UID as the TENTATIVE one mailed
+  // at submit, with sequence=1 and STATUS:CONFIRMED. The resident's
+  // calendar collapses these into a single entry that flips from
+  // tentative → confirmed in place.
+  mailBookingInviteAfter({
+    phase: 'approve',
+    origin: originFromRequest(actor.request),
+    bookingId,
+    facility:  before.facility,
+    date:      before.date,
+    timeSlot:  before.time_slot,
+    notes:     before.notes,
+    resident:  { name: before.requester_name, email: before.requester_email },
+  });
+
   return {
     ok: true,
     status: 'approved',
     label: `Approved by ${actor.fullName ?? 'admin'}`,
-    booking: after as BookingRow,
+    booking: after as unknown as BookingRow,
   };
 }
 
@@ -151,6 +212,22 @@ export async function rejectBooking(
     bookingId,
     requesterId: before.user_id,
     approved: false,
+  });
+
+  // Calendar CANCEL — same UID, sequence=2, METHOD:CANCEL,
+  // STATUS:CANCELLED. Calendar apps remove the previously-tentative
+  // entry from the resident's calendar instead of leaving it sitting
+  // there indefinitely.
+  mailBookingInviteAfter({
+    phase: 'reject',
+    origin: originFromRequest(actor.request),
+    bookingId,
+    facility:  before.facility,
+    date:      before.date,
+    timeSlot:  before.time_slot,
+    notes:     before.notes,
+    resident:  { name: before.requester_name, email: before.requester_email },
+    reason:    cleanReason,
   });
 
   return {

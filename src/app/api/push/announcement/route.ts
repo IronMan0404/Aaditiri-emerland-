@@ -38,7 +38,7 @@ export async function POST(request: Request) {
 
   const { data: row, error } = await supabase
     .from('announcements')
-    .select('id, title, content')
+    .select('id, title, content, created_by')
     .eq('id', body.announcementId)
     .single();
   if (error || !row) {
@@ -49,10 +49,24 @@ export async function POST(request: Request) {
   // full content (which can be paragraphs of HTML/text).
   const preview = (row.content ?? '').replace(/\s+/g, ' ').slice(0, 200);
 
+  // Resolve the author's full_name so the dispatched notification can
+  // show "From <Name>". If the author's profile was deleted, the
+  // renderer falls back to "Aaditri Emerland Admin".
+  let senderName: string | null = null;
+  if (row.created_by) {
+    const { data: senderProfile } = await supabase
+      .from('profiles')
+      .select('full_name')
+      .eq('id', row.created_by)
+      .maybeSingle();
+    senderName = senderProfile?.full_name ?? null;
+  }
+
   const result = await notify('announcement_published', row.id, {
     announcementId: row.id,
     title: row.title,
     preview,
+    senderName,
   });
 
   return NextResponse.json({

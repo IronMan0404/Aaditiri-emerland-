@@ -73,34 +73,51 @@ export default function BroadcastsPage() {
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-6">
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-bold text-gray-900">Broadcasts</h1>
-        {isAdmin && <Button onClick={() => setOpen(true)} size="sm"><Plus size={16} />Send Broadcast</Button>}
+      <div className="flex items-start justify-between gap-3 mb-4">
+        <div>
+          <div className="flex items-center gap-2">
+            <Radio size={22} className="text-[#1B5E20]" />
+            <h1 className="text-2xl font-bold text-gray-900">Broadcasts</h1>
+          </div>
+          <p className="text-sm text-gray-500 mt-1">Society-wide push messages from your admin team.</p>
+        </div>
+        {isAdmin && (
+          <Button onClick={() => setOpen(true)} size="sm" className="flex-shrink-0">
+            <Plus size={16} className="mr-1" />Send
+          </Button>
+        )}
       </div>
 
-      <div className="flex items-center gap-2 bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 mb-5">
-        <Info size={16} className="text-blue-500 shrink-0" />
-        <p className="text-xs text-blue-700">Community-wide messages from the admin team</p>
-      </div>
+      {isAdmin && (
+        <div className="flex items-center gap-2 bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 mb-5">
+          <Info size={16} className="text-blue-500 shrink-0" />
+          <p className="text-xs text-blue-700">Broadcasts trigger an instant push notification to every resident.</p>
+        </div>
+      )}
 
       {loading ? (
         <div className="space-y-3">{[1,2,3].map(i => <div key={i} className="h-28 bg-gray-100 rounded-xl animate-pulse" />)}</div>
       ) : items.length === 0 ? (
-        <p className="text-center text-gray-400 py-12">No broadcasts yet</p>
+        <div className="text-center py-16 bg-white rounded-xl border border-dashed border-gray-300">
+          <Radio className="mx-auto text-gray-300 mb-3" size={36} />
+          <p className="text-sm text-gray-500">No broadcasts yet.</p>
+        </div>
       ) : (
         <div className="space-y-3">
           {items.map((b) => (
-            <div key={b.id} className="bg-white rounded-xl p-4 shadow-sm border-l-4 border-[#1B5E20]">
+            <div key={b.id} className="bg-white rounded-xl border border-gray-200 border-l-4 border-l-[#1B5E20] p-4 hover:shadow-sm transition-shadow">
               <div className="flex items-start justify-between gap-3">
-                <div className="flex-1">
+                <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
-                    <div className="w-7 h-7 bg-[#1B5E20] rounded-full flex items-center justify-center"><Radio size={14} className="text-white" /></div>
-                    <h3 className="font-bold text-gray-900">{b.title}</h3>
+                    <div className="w-7 h-7 bg-[#1B5E20] rounded-full flex items-center justify-center flex-shrink-0">
+                      <Radio size={13} className="text-white" />
+                    </div>
+                    <h3 className="font-semibold text-gray-900 truncate">{b.title}</h3>
                   </div>
-                  <p className="text-sm text-gray-600 leading-relaxed">{b.message}</p>
-                  <div className="flex gap-3 mt-2">
-                    <span className="text-xs text-[#1B5E20] font-semibold">{(b.profiles as any)?.full_name || 'Admin'}</span>
-                    <span className="text-xs text-gray-400">{format(new Date(b.created_at), 'dd MMM yyyy, HH:mm')}</span>
+                  <p className="text-sm text-gray-600 leading-relaxed whitespace-pre-wrap">{b.message}</p>
+                  <div className="flex gap-3 mt-2 text-xs">
+                    <span className="text-[#1B5E20] font-semibold">{(b.profiles as any)?.full_name || 'Admin'}</span>
+                    <span className="text-gray-400">{format(new Date(b.created_at), 'dd MMM yyyy, HH:mm')}</span>
                   </div>
                 </div>
                 {isAdmin && (
@@ -108,7 +125,7 @@ export default function BroadcastsPage() {
                     type="button"
                     onClick={() => handleDelete(b.id)}
                     aria-label={`Delete broadcast ${b.title}`}
-                    className="text-gray-300 hover:text-red-500 transition-colors mt-1"
+                    className="text-gray-300 hover:text-red-500 transition-colors mt-0.5 p-1 -m-1"
                   >
                     <Trash2 size={16} />
                   </button>

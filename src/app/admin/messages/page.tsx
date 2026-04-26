@@ -22,6 +22,11 @@ interface SentMessageRow extends BotMessage {
   whatsapp: WhatsAppStats;
 }
 
+interface ChannelStatus {
+  whatsapp: boolean;
+  telegram: boolean;
+}
+
 export default function AdminMessagesPage() {
   const { profile } = useAuth();
   const supabase = createClient();
@@ -31,6 +36,12 @@ export default function AdminMessagesPage() {
   const [recipientCount, setRecipientCount] = useState<number | null>(null);
   const [history, setHistory] = useState<SentMessageRow[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(true);
+  // Per-card "WhatsApp / Telegram" badges. Cosmetic — derived from
+  // server env (TELEGRAM_BOT_TOKEN / MSG91_AUTHKEY) so we can show
+  // "enabled" vs "not configured" without exposing the keys to the
+  // browser. Sends still happen unconditionally; this just tells
+  // admins which channels were actually attempted.
+  const [channels, setChannels] = useState<ChannelStatus>({ whatsapp: false, telegram: false });
 
   async function loadRecipientCount() {
     const { count } = await supabase
@@ -92,9 +103,23 @@ export default function AdminMessagesPage() {
     setLoadingHistory(false);
   }
 
+  async function loadChannels() {
+    try {
+      const res = await fetch('/api/admin/messages/channels', { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = (await res.json()) as ChannelStatus;
+      setChannels({ whatsapp: !!data.whatsapp, telegram: !!data.telegram });
+    } catch {
+      // Best-effort — if the endpoint is down we just leave both badges
+      // as "not configured", which is the safer default than claiming
+      // delivery succeeded.
+    }
+  }
+
   useEffect(() => {
     loadRecipientCount();
     loadHistory();
+    loadChannels();
   }, []);
 
   async function handleSend(e: React.FormEvent) {
@@ -133,7 +158,12 @@ export default function AdminMessagesPage() {
         : wa.disabled
           ? ' — WhatsApp not configured'
           : ` — WA: ${wa.sent} sent, ${wa.failed} failed, ${wa.skipped} skipped`;
-      toast.success(`Sent to ${n} resident${n === 1 ? '' : 's'}${waText}`);
+      // The send route always dispatches via notify() which fans out
+      // to push + Telegram. We can't read per-recipient Telegram
+      // delivery counts here without a schema change; surface a
+      // best-effort line so admins know it was attempted.
+      const tgText = channels.telegram ? ' — Telegram: dispatched' : ' — Telegram: not configured';
+      toast.success(`Sent to ${n} resident${n === 1 ? '' : 's'}${waText}${tgText}`);
       setBody('');
       loadHistory();
     } catch (err) {
@@ -259,6 +289,34 @@ export default function AdminMessagesPage() {
                         )}
                       </div>
                     )}
+                    {/* Telegram channel badge (cosmetic). We don't yet
+                        track per-recipient Telegram delivery on the
+                        bot_message_recipients row — the dispatcher
+                        writes to its own telegram_notifications_sent
+                        ledger — so we only surface "enabled / not
+                        configured" derived from server env. Adding
+                        per-recipient stats is a follow-up that
+                        requires a schema change. */}
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-[11px]">
+                      <span className="inline-flex items-center gap-1 text-gray-500">
+                        <Send size={12} /> Telegram
+                      </span>
+                      {channels.telegram ? (
+                        <span
+                          className="inline-flex items-center gap-1 text-blue-600"
+                          title="Bot is configured; dispatched to every paired chat via the notify() pipeline"
+                        >
+                          <CheckCircle2 size={12} /> dispatched
+                        </span>
+                      ) : (
+                        <span
+                          className="inline-flex items-center gap-1 text-gray-400"
+                          title="TELEGRAM_BOT_TOKEN is not set; in-app delivery only"
+                        >
+                          <CircleSlash size={12} /> not configured
+                        </span>
+                      )}
+                    </div>
                   </div>
                   <button
                     type="button"
