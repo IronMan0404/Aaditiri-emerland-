@@ -480,6 +480,16 @@ create policy "Residents can cancel own pending bookings, admins update any"
     or (auth.uid() = user_id and status in ('pending', 'cancelled'))
   );
 
+-- Admin-only hard delete. Residents must use the cancel-via-update
+-- path so the audit trail stays intact. See migration
+-- 20260505_bookings_delete_policy.sql for context.
+drop policy if exists "Only admins can delete bookings" on public.bookings;
+create policy "Only admins can delete bookings"
+  on public.bookings for delete to authenticated
+  using (
+    exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
+  );
+
 -- BROADCASTS policies
 create policy "Broadcasts viewable by all authenticated" on public.broadcasts for select to authenticated using (true);
 create policy "Only admins can send broadcasts" on public.broadcasts for insert to authenticated with check (exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'));

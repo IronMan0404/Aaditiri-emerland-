@@ -51,12 +51,28 @@ export async function POST(
   const body = (await req.json().catch(() => ({}))) as DeletePayload;
   const reason = (body.reason ?? '').trim().slice(0, 500) || null;
 
-  const { error: delErr } = await supabase
+  // `.select()` makes Supabase return the deleted rows so we can
+  // verify the delete actually happened. Without this, a missing
+  // RLS DELETE policy used to silently affect 0 rows, the route
+  // returned ok:true, and the audit log got an entry for a row
+  // that was still in the table. See migration
+  // 20260505_bookings_delete_policy.sql.
+  const { data: deleted, error: delErr } = await supabase
     .from('bookings')
     .delete()
-    .eq('id', id);
+    .eq('id', id)
+    .select('id');
   if (delErr) {
     return NextResponse.json({ error: delErr.message }, { status: 500 });
+  }
+  if (!deleted || deleted.length === 0) {
+    return NextResponse.json(
+      {
+        error:
+          'Delete blocked by row-level security. Apply migration 20260505_bookings_delete_policy.sql.',
+      },
+      { status: 500 },
+    );
   }
 
   const flat = (existing.profiles as { flat_number?: string | null } | null)?.flat_number ?? '?';
