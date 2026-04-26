@@ -1,7 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Megaphone, Calendar, Bookmark, Images, Radio, User, Home, Settings, Newspaper, LogOut, Shield, MessageSquare, Bot, Users, AlertCircle, KeyRound, ScanLine, Wallet, Sparkles, BookOpen, AlarmClock, Briefcase } from 'lucide-react';
+import { Megaphone, Calendar, Bookmark, Images, Radio, User, Home, Settings, Newspaper, LogOut, Shield, MessageSquare, Bot, Users, AlertCircle, KeyRound, ScanLine, Wallet, Sparkles, BookOpen, AlarmClock, Briefcase, UserCog } from 'lucide-react';
 import { createClient } from '@/lib/supabase';
 import { useAuth } from '@/hooks/useAuth';
 import { useEffect, useMemo } from 'react';
@@ -28,6 +28,7 @@ const navItems = [
 const adminItems = [
   { href: '/admin', icon: Shield, label: 'Admin Dashboard' },
   { href: '/admin/users', icon: Settings, label: 'Manage Users' },
+  { href: '/admin/staff', icon: UserCog, label: 'Manage Staff' },
   { href: '/admin/issues', icon: AlertCircle, label: 'Issues Board' },
   { href: '/admin/clubhouse', icon: KeyRound, label: 'Clubhouse' },
   { href: '/admin/clubhouse/validate', icon: ScanLine, label: 'Validate Pass' },

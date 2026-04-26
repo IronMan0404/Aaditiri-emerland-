@@ -13,7 +13,7 @@ const ROLE_COOKIE_MAX_AGE = 60 * 30; // 30 minutes — short enough that an
 
 interface RoleCacheValue {
   sub: string;
-  role: 'admin' | 'user' | null;
+  role: 'admin' | 'user' | 'staff' | null;
   approved: boolean;
 }
 
@@ -50,10 +50,14 @@ function readRoleCookie(request: NextRequest): RoleCacheValue | null {
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Fast path: anything that isn't /dashboard or /admin doesn't need auth at
-  // all. The matcher already excludes static assets but auth pages, the API
-  // routes, and the home page would otherwise still pay for an auth lookup.
-  const needsAuth = pathname.startsWith('/dashboard') || pathname.startsWith('/admin');
+  // Fast path: anything that isn't /dashboard, /admin, or /staff doesn't
+  // need auth at all. The matcher already excludes static assets but auth
+  // pages, the API routes, and the home page would otherwise still pay
+  // for an auth lookup.
+  const needsAuth =
+    pathname.startsWith('/dashboard')
+    || pathname.startsWith('/admin')
+    || pathname.startsWith('/staff');
   if (!needsAuth) {
     return NextResponse.next({ request });
   }
@@ -107,13 +111,13 @@ export async function proxy(request: NextRequest) {
   // "denied" is cheap (the user only sees one page during that window:
   // /auth/pending or /auth/login) and makes the approval flow feel
   // instant.
-  let role: 'admin' | 'user' | null = null;
+  let role: 'admin' | 'user' | 'staff' | null = null;
   let isApproved = false;
   const cached = readRoleCookie(request);
   const trustCache =
     cached !== null
     && cached.sub === userId
-    && (cached.role === 'admin' || cached.approved === true);
+    && (cached.role === 'admin' || cached.role === 'staff' || cached.approved === true);
 
   if (trustCache && cached) {
     role = cached.role;
@@ -129,7 +133,7 @@ export async function proxy(request: NextRequest) {
         .select('role, is_approved')
         .eq('id', userId)
         .single();
-      role = (profile?.role as 'admin' | 'user' | undefined) ?? null;
+      role = (profile?.role as 'admin' | 'user' | 'staff' | undefined) ?? null;
       isApproved = Boolean(profile?.is_approved);
     } catch {
       // Treat as non-admin, non-approved.
@@ -138,7 +142,7 @@ export async function proxy(request: NextRequest) {
     // Only persist the cookie when the result is something worth
     // caching (the user is actually in). Persisting "denied" would
     // re-introduce the staleness bug.
-    if (role === 'admin' || isApproved) {
+    if (role === 'admin' || role === 'staff' || isApproved) {
       supabaseResponse.cookies.set(
         ROLE_COOKIE,
         JSON.stringify({ sub: userId, role, approved: isApproved } satisfies RoleCacheValue),
@@ -156,6 +160,30 @@ export async function proxy(request: NextRequest) {
       // doesn't see it either.
       supabaseResponse.cookies.delete(ROLE_COOKIE);
     }
+  }
+
+  // ─── Staff routing ────────────────────────────────────────────
+  // Staff users only see /staff/*. Hitting /admin or /dashboard
+  // bounces them back to their staff home. The role-specific home
+  // page (/staff/security vs /staff/housekeeping) is decided by
+  // /staff/page.tsx itself; we route every staff member to /staff
+  // and let that page redirect.
+  if (role === 'staff') {
+    if (!pathname.startsWith('/staff')) {
+      const url = request.nextUrl.clone();
+      url.pathname = '/staff';
+      return NextResponse.redirect(url);
+    }
+    return supabaseResponse;
+  }
+
+  // Non-staff users hitting /staff get bounced to their own home.
+  // Admins go to /admin (they manage staff, they don't BE staff);
+  // residents go to /dashboard.
+  if (pathname.startsWith('/staff')) {
+    const url = request.nextUrl.clone();
+    url.pathname = role === 'admin' ? '/admin' : '/dashboard';
+    return NextResponse.redirect(url);
   }
 
   if (pathname.startsWith('/admin') && role !== 'admin') {
@@ -177,5 +205,5 @@ export const config = {
   // Match only routes that actually need auth gating. Everything else (API
   // routes that do their own auth, /auth/*, the marketing home page, static
   // assets) skips the proxy entirely.
-  matcher: ['/dashboard/:path*', '/admin/:path*'],
+  matcher: ['/dashboard/:path*', '/admin/:path*', '/staff/:path*'],
 };

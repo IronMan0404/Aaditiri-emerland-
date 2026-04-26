@@ -22,6 +22,7 @@ import {
   BookOpen,
   AlarmClock,
   Briefcase,
+  UserCog,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase';
 import { useAuth } from '@/hooks/useAuth';
@@ -82,6 +83,7 @@ export default function MoreSheet({ open, onClose }: MoreSheetProps) {
   const adminItems: SheetItem[] = [
     { href: '/admin', icon: Shield, label: 'Admin Dashboard', desc: 'KPIs & quick actions' },
     { href: '/admin/users', icon: Settings, label: 'Manage Users', desc: 'Approve, edit, delete residents' },
+    { href: '/admin/staff', icon: UserCog, label: 'Manage Staff', desc: 'Security & housekeeping logins, attendance' },
     { href: '/admin/issues', icon: AlertCircle, label: 'Issues Board', desc: 'Kanban + analytics' },
     { href: '/admin/clubhouse', icon: KeyRound, label: 'Clubhouse Admin', desc: 'Tiers, subscriptions & catalog' },
     { href: '/admin/clubhouse/validate', icon: ScanLine, label: 'Validate Pass', desc: 'Scan QR to admit guests' },

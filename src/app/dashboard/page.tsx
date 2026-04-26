@@ -8,6 +8,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { format } from 'date-fns';
 import type { Announcement, Event, Broadcast } from '@/types';
 import NearbyPill from '@/components/dashboard/NearbyPill';
+import OnDutyCard from '@/components/dashboard/OnDutyCard';
 
 export default function DashboardPage() {
   const { profile, isAdmin, mounted } = useAuth();
@@ -107,6 +108,12 @@ export default function DashboardPage() {
             </Link>
           ))}
         </div>
+
+        {/* On-duty card — only renders when at least one guard or
+            housekeeper is checked in. Auto-hides otherwise so the
+            common "weekend morning" case doesn't show an empty
+            section. */}
+        <OnDutyCard />
 
         {/* Broadcasts */}
         {broadcasts.length > 0 && (

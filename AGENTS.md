@@ -179,6 +179,37 @@ This is the architectural commitment: every approval path (web AND Telegram) wri
 
 **Don't bypass the dispatcher.** Direct calls to `sendPushToUsers` / `sendPushToAllResidents` are deprecated for new code — use `notify()` so push and Telegram stay in sync. The ones that remain (rate-limit warnings, internal admin pings) are documented in their call site.
 
+### 7d. Staff management (security + housekeeping)
+
+Mini staff-management module added in April 2026. Lets admins create dedicated logins for security guards and housekeepers, who land on a **role-specific** screen at `/staff/*` and see absolutely nothing of the resident app (no announcements, no bookings, no funds, no AI, no /dashboard).
+
+**Migration to apply** on existing prod DBs: `supabase/migrations/20260511_staff_management.sql` (also appended to `supabase/schema.sql`). It extends `profiles.role` to allow `'staff'` (in addition to `'admin'` and `'user'`), creates `staff_profiles` + `staff_attendance`, and registers a `staff_on_duty_now()` SECURITY DEFINER function that returns the masked projection residents are allowed to see.
+
+**Routes.** New top-level path `/staff` with `proxy.ts` enforcement: a profile with `role='staff'` is **forced** to `/staff/*` (any hit on `/dashboard/*` or `/admin/*` redirects to `/staff`), and conversely a non-staff profile hitting `/staff/*` bounces back to `/dashboard` or `/admin`. The proxy's role-cookie cache now treats `'staff'` like `'admin'` for caching purposes (stable, worth caching).
+
+The `/staff` root page itself is a tiny client-side router that reads `staff_profiles.staff_role` and forwards to `/staff/security` or `/staff/housekeeping`. Both sub-pages share `src/components/staff/StaffHome.tsx` — only the role banner colour + label changes.
+
+**Auth.** Admin creates the staff login by POST to `/api/admin/staff` (full name, phone in any format we E.164-normalise, role, optional address + hire date). The endpoint:
+1. Calls `admin.auth.admin.createUser` with a synthetic email of the form `staff+91XXXXXXXXXX@aaditri.invalid` and a generated 12-char temp password (alphabet excludes 0/O/1/l/I to make it dictation-friendly).
+2. Upserts the shadow `profiles` row with `role='staff'`, `is_approved=true`, `phone=E.164`. The `handle_new_user` trigger has already inserted a default row, so we override.
+3. Inserts the `staff_profiles` row.
+4. Returns the temp password ONCE in the response. The admin reads it to the staff member; closing the modal discards it. Forgotten password → admin POSTs to `/api/admin/staff/[id]/reset-password` to mint a fresh one (same one-shot reveal pattern).
+
+Staff sign in via the existing email-resolver flow (`/api/auth/resolve-identifier` → phone → synthetic email → `signInWithPassword`). Staff don't use Telegram, OTP, or any forgot-password feature in V1 — admin is the recovery channel by design.
+
+**Attendance.** Free-form check-in / check-out, no roster, no GPS, no selfie (per V1 scope decisions). One row per shift in `staff_attendance` with `check_in_at` always set and `check_out_at` initially null. A **partial unique index** `staff_attendance_one_open_per_staff` (`unique(staff_id) where check_out_at is null`) enforces "at most one open shift per staff member" — a duplicate check-in returns Postgres 23505 which the API surfaces as 409 "already checked in". The same index doubles as the canonical "is this person on duty right now?" lookup.
+
+`duty_date` is a `generated always as ((check_in_at at time zone 'Asia/Kolkata')::date) stored` column so the V2 monthly-attendance report can group by date without recomputing the IST conversion.
+
+**Resident-facing visibility.** Residents see a tiny "On duty now" card on `/dashboard` (component `OnDutyCard.tsx`) listing **first-name + initial only**, no phone, no address, no check-in time. Data comes from `/api/staff/on-duty` which calls the `staff_on_duty_now()` SECURITY DEFINER function. **There is no resident-facing SELECT policy on `staff_profiles` or `staff_attendance`** — residents only see what the function explicitly returns. A curious resident hitting Supabase REST against `staff_profiles` directly gets zero rows. This was a deliberate privacy choice; do not relax it without a re-evaluation.
+
+**RLS.** Three audiences:
+- **Admins** — full CRUD on both staff tables (single-policy `for all` using `profiles.role = 'admin'`).
+- **The staff member themselves** — read their own `staff_profiles` row, full CRUD on their own `staff_attendance` rows. They cannot rename themselves or change their role; that goes through admin.
+- **Residents** — no direct table access. They go through `staff_on_duty_now()` only.
+
+**V2 features deliberately deferred** (so don't bolt them onto V1): shift roster, leave application + approval, visitor management, photo-on-check-in, salary register, resident "rate this helper" flow. The V1 schema is sized for these but doesn't pre-build them.
+
 ### 8. Windows + WSL warning
 The repo lives at `C:\work\aaditri-emerland-web`. **Never run `next dev` from WSL against `/mnt/c/...`** — it corrupts Turbopack's cache. If someone hits `Cannot find module '../chunks/ssr/[turbopack]_runtime.js'`, first run:
 ```powershell
