@@ -41,6 +41,14 @@ interface FormState {
   title: string;
   body: string;
   fire_on: string;
+  // Repeating mode: when true the modal exposes the send_until
+  // picker. When false we send `send_until: null` to the API
+  // (single-fire). We intentionally keep the toggle in form state
+  // — not derived from `send_until` length — so an admin can flip
+  // off "repeating", remember the date, and flip it back on
+  // without re-typing.
+  repeating: boolean;
+  send_until: string;
 }
 
 function todayIst(): string {
@@ -57,8 +65,32 @@ function tomorrowIst(): string {
     .slice(0, 10);
 }
 
+// 60 days = the API hard cap. We mirror it here so the
+// HTML date-picker's `max=` attribute forms a soft fence; the
+// API's check is the real guard.
+const MAX_REPEAT_DAYS = 60;
+
+function addDaysIso(iso: string, days: number): string {
+  const d = new Date(iso + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function daysBetweenIso(fromIso: string, toIso: string): number {
+  const f = new Date(fromIso + 'T00:00:00Z').getTime();
+  const t = new Date(toIso + 'T00:00:00Z').getTime();
+  return Math.round((t - f) / (24 * 60 * 60 * 1000));
+}
+
 function emptyForm(): FormState {
-  return { title: '', body: '', fire_on: tomorrowIst() };
+  const tomorrow = tomorrowIst();
+  return {
+    title: '',
+    body: '',
+    fire_on: tomorrow,
+    repeating: false,
+    send_until: tomorrow,
+  };
 }
 
 export default function AdminRemindersPage() {
@@ -106,7 +138,15 @@ export default function AdminRemindersPage() {
   }
 
   function openEdit(r: ScheduledReminder) {
-    setForm({ title: r.title, body: r.body, fire_on: r.fire_on });
+    setForm({
+      title: r.title,
+      body: r.body,
+      fire_on: r.fire_on,
+      repeating: r.send_until !== null,
+      // If the row was single-fire, seed the picker with fire_on so
+      // toggling repeating-on doesn't leave an empty / stale value.
+      send_until: r.send_until ?? r.fire_on,
+    });
     setEditing(r);
     setShowCreate(true);
   }
@@ -121,17 +161,24 @@ export default function AdminRemindersPage() {
     const title = form.title.trim();
     const body = form.body.trim();
     const fireOn = form.fire_on.trim();
+    const sendUntil = form.repeating ? form.send_until.trim() : null;
 
     if (!title) return toast.error('Title is required');
     if (!body) return toast.error('Body is required');
     if (!fireOn) return toast.error('Pick a fire date');
+    if (form.repeating) {
+      if (!sendUntil) return toast.error('Pick a "send until" date');
+      if (sendUntil < fireOn)
+        return toast.error('"Send until" cannot be before the start date');
+      const span = daysBetweenIso(fireOn, sendUntil);
+      if (span > MAX_REPEAT_DAYS)
+        return toast.error(
+          `Repeating window is ${span} days; max ${MAX_REPEAT_DAYS}.`,
+        );
+    }
     if (fireOn < todayIst()) {
-      // Backend allows past dates (so they fire on the next cron),
-      // but the UI nudges admins to use today/tomorrow because the
-      // "fires at next 09:00 IST" semantics get confusing for past
-      // dates.
       const ok = confirm(
-        'Fire date is in the past — the reminder will fire on the next cron run. Continue?',
+        'Start date is in the past — the reminder will fire on the next cron run. Continue?',
       );
       if (!ok) return;
     }
@@ -145,7 +192,12 @@ export default function AdminRemindersPage() {
       const res = await fetch(url, {
         method,
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ title, body, fire_on: fireOn }),
+        body: JSON.stringify({
+          title,
+          body,
+          fire_on: fireOn,
+          send_until: sendUntil,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? 'Save failed');
@@ -174,9 +226,13 @@ export default function AdminRemindersPage() {
   }
 
   async function fireNow(r: ScheduledReminder) {
+    const tail =
+      r.send_until !== null && r.status === 'pending'
+        ? ' This will ALSO end the daily schedule — remaining days will not fire automatically.'
+        : '';
     if (
       !confirm(
-        `Send "${r.title}" right now to every resident? This bypasses the schedule.`,
+        `Send "${r.title}" right now to every resident? This bypasses the schedule.${tail}`,
       )
     )
       return;
@@ -218,7 +274,9 @@ export default function AdminRemindersPage() {
         <p className="text-xs text-amber-800 leading-relaxed">
           Reminders are picked up <strong>once a day at 09:00 IST</strong>. A
           reminder dated today (or any past date) fires on the next 09:00 IST
-          run — they don&rsquo;t fire at a specific time of day. For
+          run — they don&rsquo;t fire at a specific time of day. Pick{' '}
+          <strong>Send daily through</strong> a later date to repeat the same
+          reminder for several mornings (max {MAX_REPEAT_DAYS} days). For
           time-sensitive notices, use <strong>Send now</strong> from the row
           menu, or post a Broadcast/Announcement directly.
         </p>
@@ -339,6 +397,25 @@ function ReminderRow({
   } catch {
     fireLabel = reminder.fire_on;
   }
+  // For repeating reminders we render a date range instead of a
+  // single date. Falls back gracefully if either ISO is malformed.
+  const isRepeating = reminder.send_until !== null;
+  let scheduleLabel = fireLabel;
+  if (isRepeating) {
+    let endLabel = reminder.send_until!;
+    try {
+      endLabel = format(parseISO(reminder.send_until!), 'dd MMM yyyy');
+    } catch {
+      // keep the raw ISO
+    }
+    let startShort = reminder.fire_on;
+    try {
+      startShort = format(parseISO(reminder.fire_on), 'dd MMM');
+    } catch {
+      // keep the raw ISO
+    }
+    scheduleLabel = `${startShort} → ${endLabel}`;
+  }
   const sentRel = reminder.sent_at
     ? formatDistanceToNow(parseISO(reminder.sent_at), { addSuffix: true })
     : null;
@@ -354,12 +431,30 @@ function ReminderRow({
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-3 text-xs text-gray-500">
             <span className="inline-flex items-center gap-1">
               <Calendar size={12} />
-              {fireLabel}
+              {scheduleLabel}
             </span>
+            {isRepeating && isPending && (
+              <span className="inline-flex items-center gap-1 text-[#1B5E20] bg-emerald-50 px-1.5 py-0.5 rounded-md">
+                <Clock size={11} />
+                Daily · fired {reminder.fired_count}×
+                {reminder.last_fired_on && (
+                  <span className="text-gray-500">
+                    {' '}· last {(() => {
+                      try {
+                        return format(parseISO(reminder.last_fired_on), 'dd MMM');
+                      } catch {
+                        return reminder.last_fired_on;
+                      }
+                    })()}
+                  </span>
+                )}
+              </span>
+            )}
             {isSent && sentRel && (
               <span className="inline-flex items-center gap-1 text-emerald-700">
                 <CheckCircle2 size={12} />
                 Sent {sentRel}
+                {reminder.fired_count > 1 && ` · ${reminder.fired_count}×`}
               </span>
             )}
             {isCancelled && (
@@ -368,7 +463,7 @@ function ReminderRow({
                 Cancelled
               </span>
             )}
-            {reminder.fired_count > 1 && (
+            {!isRepeating && !isSent && !isCancelled && reminder.fired_count > 1 && (
               <span className="inline-flex items-center gap-1 text-gray-500">
                 <Clock size={12} />
                 Fired {reminder.fired_count}×
@@ -465,15 +560,79 @@ function Modal({
           />
 
           <Input
-            label="Fire date"
+            label={form.repeating ? 'Start date' : 'Fire date'}
             type="date"
             value={form.fire_on}
-            onChange={(e) => setForm((s) => ({ ...s, fire_on: e.target.value }))}
+            onChange={(e) =>
+              setForm((s) => {
+                const newFireOn = e.target.value;
+                // If the start date moves past send_until,
+                // pull send_until forward to match. Keeps the
+                // form internally consistent without yelling at
+                // the admin mid-typing.
+                const newSendUntil =
+                  s.repeating && s.send_until && s.send_until < newFireOn
+                    ? newFireOn
+                    : s.send_until;
+                return { ...s, fire_on: newFireOn, send_until: newSendUntil };
+              })
+            }
             min={todayIst()}
           />
-          <p className="text-xs text-gray-500 -mt-2">
-            Reminder will be sent at the next 09:00 IST on or after this date.
-          </p>
+
+          {/* Repeating toggle. Single click swaps the body of the
+              date section between a single-line note and a second
+              date picker. */}
+          <label className="flex items-start gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={form.repeating}
+              onChange={(e) =>
+                setForm((s) => ({
+                  ...s,
+                  repeating: e.target.checked,
+                  // When opting in, default the end date to fire_on
+                  // (i.e. just one day) if it's older than fire_on.
+                  send_until:
+                    e.target.checked && s.send_until < s.fire_on
+                      ? s.fire_on
+                      : s.send_until,
+                }))
+              }
+            />
+            <span className="text-sm text-gray-700">
+              Send daily through an end date
+              <span className="block text-xs text-gray-500">
+                Same reminder fires every morning at 09:00 IST until the end
+                date. Useful for nag campaigns (vote-closing reminders, dues
+                deadlines).
+              </span>
+            </span>
+          </label>
+
+          {form.repeating ? (
+            <>
+              <Input
+                label="Send daily through"
+                type="date"
+                value={form.send_until}
+                onChange={(e) =>
+                  setForm((s) => ({ ...s, send_until: e.target.value }))
+                }
+                min={form.fire_on}
+                max={addDaysIso(form.fire_on, MAX_REPEAT_DAYS)}
+              />
+              <p className="text-xs text-gray-500 -mt-2">
+                Will fire {Math.max(1, daysBetweenIso(form.fire_on, form.send_until) + 1)}× —
+                once each morning from {form.fire_on} through {form.send_until}.
+              </p>
+            </>
+          ) : (
+            <p className="text-xs text-gray-500 -mt-2">
+              Reminder will be sent at the next 09:00 IST on or after this date.
+            </p>
+          )}
         </div>
 
         <div className="px-5 py-4 border-t border-gray-100 flex justify-end gap-2">

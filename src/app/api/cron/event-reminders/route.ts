@@ -38,11 +38,14 @@ import { notify } from '@/lib/notify';
 //      idempotent across runs.
 //
 //   4. Scheduled reminders — dispatches admin-curated rows from
-//      `public.scheduled_reminders` whose `fire_on` is today-or-earlier
-//      and whose `status` is still 'pending'. Status flips to 'sent' on
-//      success or 'failed' on dispatcher error. Idempotency: the status
-//      flip is conditional on `status='pending'` so a concurrent
-//      invocation can't double-fire.
+//      `public.scheduled_reminders` whose `fire_on` is today-or-earlier,
+//      `send_until` is null or in-the-future, and `last_fired_on` is
+//      not today. Single-fire rows (send_until = null) flip to 'sent'
+//      after a successful fire; repeating rows stay 'pending' until the
+//      cron processes the day where today >= send_until. Per-day dedup
+//      key (refId = "${row.id}:${YYYY-MM-DD}") ensures notify()'s
+//      telegram_notifications_sent ledger doesn't collapse tomorrow's
+//      fire into today's. Same-day cron retries are still idempotent.
 //
 // All four failures are logged but don't abort sibling passes — a
 // dropped push provider shouldn't stop us from updating subscription
@@ -301,6 +304,9 @@ interface ScheduledReminderCronRow {
   title: string;
   body: string;
   fire_on: string;
+  send_until: string | null;
+  last_fired_on: string | null;
+  fired_count: number;
   created_by: string | null;
 }
 
@@ -317,20 +323,41 @@ function istTodayDate(): string {
 async function runScheduledReminders(admin: AdminClient) {
   const todayIst = istTodayDate();
 
-  // Fetch every pending row whose fire date is today-or-earlier.
-  // "earlier" lets us catch a row that was inserted *after* the
-  // previous cron run (e.g. yesterday at 11pm with fire_on=yesterday)
-  // — we'd rather fire it a few hours late than skip it forever.
+  // Eligible rows: status='pending' AND fire_on <= today AND
+  // (send_until IS NULL OR send_until >= today). Rows we've
+  // already fired today (last_fired_on = today) are filtered
+  // in JS below — Supabase can't express IS DISTINCT FROM in a
+  // chained .is/.eq, and the column may be NULL for first-fire.
+  //
+  // Rationale for the date logic:
+  //   • single-fire row (send_until = NULL): first-pass fires it,
+  //     post-fire we set status='sent' and we're done forever.
+  //   • repeating row (send_until >= today): each daily run that
+  //     finds last_fired_on < today fires it again, advances
+  //     last_fired_on, and increments fired_count. The very last
+  //     fire (where today >= send_until) ALSO flips status='sent'.
+  //   • a row whose send_until has slipped past today without
+  //     ever firing (e.g. cron was down) still gets a final fire
+  //     because send_until is the END date, not a "must fire by"
+  //     deadline; the admin's intent was "send it daily through
+  //     X" and we honour that with a single catch-up fire.
   const { data: rows, error } = await admin
     .from('scheduled_reminders')
-    .select('id, title, body, fire_on, created_by')
+    .select('id, title, body, fire_on, send_until, last_fired_on, fired_count, created_by')
     .eq('status', 'pending')
     .lte('fire_on', todayIst)
+    .or(`send_until.is.null,send_until.gte.${todayIst}`)
     .order('fire_on', { ascending: true });
 
   if (error) return { error: error.message };
-  const list = (rows ?? []) as ScheduledReminderCronRow[];
-  if (list.length === 0) return { found: 0, dispatched: 0 };
+
+  const allList = (rows ?? []) as ScheduledReminderCronRow[];
+  // Filter out rows already fired today. Done in JS so we don't
+  // need a partial unique index on (id, last_fired_on).
+  const list = allList.filter(
+    (r) => r.last_fired_on === null || r.last_fired_on < todayIst,
+  );
+  if (list.length === 0) return { found: 0, dispatched: 0, skipped_today: allList.length };
 
   // Pre-load creator names in one query so we don't hit `profiles`
   // once per reminder. Filter out nulls (deleted creators) before
@@ -357,24 +384,43 @@ async function runScheduledReminders(admin: AdminClient) {
 
   for (const row of list) {
     const senderName = row.created_by ? nameByCreator.get(row.created_by) ?? null : null;
+
+    // Per-day dedup key: notify()'s telegram_notifications_sent
+    // ledger is unique on (kind, refId, user). For a single-fire
+    // row that's exactly what we want (idempotent retry).
+    // For a repeating row we MUST vary the refId per day,
+    // otherwise tomorrow's fire would be silently dedup'd as a
+    // duplicate of today's. Suffixing :YYYY-MM-DD does the trick;
+    // a same-day re-run still hits the same key.
+    const dedupRefId = `${row.id}:${todayIst}`;
+
+    // Is this the row's terminal fire? Yes if send_until is NULL
+    // (single-fire) OR today is >= send_until (last day of the
+    // window). After the fire we'll flip status='sent'.
+    const isTerminalFire =
+      row.send_until === null || todayIst >= row.send_until;
+
     try {
-      await notify('scheduled_reminder', row.id, {
+      await notify('scheduled_reminder', dedupRefId, {
         reminderId: row.id,
         title: row.title,
         body: row.body,
         senderName,
       });
 
-      // Only flip to 'sent' AFTER notify() resolves. If the cron
-      // crashes mid-batch, unprocessed rows stay 'pending' and the
-      // next run picks them up (notify() has its own per-channel
-      // dedup so users don't double-receive).
+      // Stamp the fire BEFORE deciding terminal status — that way
+      // a partial failure leaves last_fired_on advanced and the
+      // next cron pass treats it like any other fired-today row.
       await admin
         .from('scheduled_reminders')
         .update({
-          status: 'sent',
-          sent_at: new Date().toISOString(),
-          fired_count: 1,
+          // For terminal fires we transition to 'sent'. For
+          // non-terminal fires we stay 'pending' so tomorrow's
+          // cron picks the row up again.
+          status: isTerminalFire ? 'sent' : 'pending',
+          sent_at: isTerminalFire ? new Date().toISOString() : null,
+          last_fired_on: todayIst,
+          fired_count: (row.fired_count ?? 0) + 1,
           error_message: null,
         })
         .eq('id', row.id)
@@ -385,13 +431,17 @@ async function runScheduledReminders(admin: AdminClient) {
       failed += 1;
       const msg = err instanceof Error ? err.message : String(err);
       console.error('[cron] scheduled reminder failed', row.id, msg);
-      // Park as 'failed' with the error message so the admin UI
-      // can show it. Admins can fire-now to retry.
+      // For repeating rows we DON'T flip to 'failed' on a single
+      // missed day — that would orphan the rest of the schedule.
+      // Single-fire rows still go to 'failed' so the admin can
+      // retry from the UI. We bump fired_count + error_message
+      // either way so the admin sees what's happening.
+      const stayPending = row.send_until !== null && todayIst < row.send_until;
       await admin
         .from('scheduled_reminders')
         .update({
-          status: 'failed',
-          fired_count: 1,
+          status: stayPending ? 'pending' : 'failed',
+          fired_count: (row.fired_count ?? 0) + 1,
           error_message: msg.slice(0, 500),
         })
         .eq('id', row.id)

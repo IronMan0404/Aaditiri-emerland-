@@ -423,6 +423,14 @@ export interface ScheduledReminder {
   body: string;
   // YYYY-MM-DD in IST. Stored as a date in the DB.
   fire_on: string;
+  // Inclusive end date for repeating reminders. NULL = single-fire
+  // (legacy + the default for new rows that don't opt in to repeat).
+  // When set, the cron fires the row daily from fire_on through
+  // send_until (inclusive in IST), then flips status to 'sent'.
+  send_until: string | null;
+  // IST date of the most recent successful fire (or null). Set by
+  // the cron and the fire-now endpoint.
+  last_fired_on: string | null;
   audience: ScheduledReminderAudience;
   status: ScheduledReminderStatus;
   created_by: string | null;

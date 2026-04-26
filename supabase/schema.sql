@@ -1663,6 +1663,11 @@ create table if not exists public.scheduled_reminders (
     title text not null check (length(trim(title)) between 1 and 120),
     body  text not null check (length(trim(body))  between 1 and 1500),
     fire_on date not null,
+    -- Inclusive end date for repeating reminders. NULL = single-fire.
+    -- Added 2026-05-13 (see migrations/20260513_scheduled_reminders_send_until.sql).
+    send_until date,
+    -- IST date the cron last fired this row. NULL until first fire.
+    last_fired_on date,
     audience text not null default 'all_residents'
         check (audience in ('all_residents')),
     status text not null default 'pending'
@@ -1674,13 +1679,37 @@ create table if not exists public.scheduled_reminders (
     cancelled_at timestamptz,
     fired_count integer not null default 0,
     error_message text,
-    last_actor uuid references public.profiles(id) on delete set null
+    last_actor uuid references public.profiles(id) on delete set null,
+    constraint scheduled_reminders_send_until_after_fire_on
+        check (send_until is null or send_until >= fire_on)
 );
+
+-- Idempotent column adds for DBs created from the original
+-- 20260506 migration that predated send_until / last_fired_on.
+alter table public.scheduled_reminders
+    add column if not exists send_until date,
+    add column if not exists last_fired_on date;
+do $$
+begin
+    if not exists (
+        select 1 from pg_constraint
+        where conname = 'scheduled_reminders_send_until_after_fire_on'
+          and conrelid = 'public.scheduled_reminders'::regclass
+    ) then
+        alter table public.scheduled_reminders
+            add constraint scheduled_reminders_send_until_after_fire_on
+            check (send_until is null or send_until >= fire_on);
+    end if;
+end;
+$$;
 
 create index if not exists scheduled_reminders_status_fire_idx
     on public.scheduled_reminders (status, fire_on);
 create index if not exists scheduled_reminders_created_at_idx
     on public.scheduled_reminders (created_at desc);
+create index if not exists scheduled_reminders_live_idx
+    on public.scheduled_reminders (status, fire_on, send_until)
+    where status = 'pending';
 
 create or replace function public.touch_scheduled_reminders_updated_at()
 returns trigger as $$
@@ -1723,7 +1752,7 @@ create policy "Admins can delete scheduled reminders"
     using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.role = 'admin'));
 
 comment on table public.scheduled_reminders is
-    'Admin-curated society-wide reminders. The daily cron picks up rows where status=pending and fire_on <= today (IST), dispatches via notify(), and flips status to sent/failed.';
+    'Admin-curated society-wide reminders. Daily 09:00 IST cron picks up rows where status=pending, fire_on <= today, send_until IS NULL OR send_until >= today, AND last_fired_on IS DISTINCT FROM today. After firing it stamps last_fired_on=today and bumps fired_count. Status flips to sent only on the run that processes today >= COALESCE(send_until, fire_on).';
 
 -- ============================================================
 -- COMMUNITY SERVICES DIRECTORY (2026-05-07)

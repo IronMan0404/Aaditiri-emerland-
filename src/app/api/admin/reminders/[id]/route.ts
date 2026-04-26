@@ -26,12 +26,21 @@ interface PatchPayload {
   title?: string;
   body?: string;
   fire_on?: string;
+  send_until?: string | null;
 }
+
+const MAX_REPEAT_DAYS = 60;
 
 function isValidIsoDate(s: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
   const d = new Date(s + 'T00:00:00Z');
   return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+}
+
+function daysBetweenIsoDates(fromIso: string, toIso: string): number {
+  const f = new Date(fromIso + 'T00:00:00Z').getTime();
+  const t = new Date(toIso + 'T00:00:00Z').getTime();
+  return Math.round((t - f) / (24 * 60 * 60 * 1000));
 }
 
 export async function PATCH(
@@ -69,6 +78,7 @@ export async function PATCH(
     title?: string;
     body?: string;
     fire_on?: string;
+    send_until?: string | null;
     last_actor: string;
   } = { last_actor: auth.user.id };
 
@@ -96,12 +106,55 @@ export async function PATCH(
     }
     update.fire_on = f;
   }
+  // send_until accepts null (revert to single-fire) or a YYYY-MM-DD.
+  // Empty string is normalised to null so the form's "clear" gesture
+  // doesn't have to special-case the absent field.
+  if (body.send_until !== undefined) {
+    if (body.send_until === null || body.send_until === '') {
+      update.send_until = null;
+    } else {
+      const su = body.send_until.trim();
+      if (!isValidIsoDate(su)) {
+        return NextResponse.json(
+          { error: 'send_until must be a YYYY-MM-DD date or null.' },
+          { status: 400 },
+        );
+      }
+      update.send_until = su;
+    }
+  }
 
   if (Object.keys(update).length === 1) {
     return NextResponse.json(
       { error: 'No editable fields provided.' },
       { status: 400 },
     );
+  }
+
+  // Validate the merged date pair (post-update). Either both
+  // fields might be in the patch, or just one; either way we
+  // need to check that the resulting row is consistent.
+  const mergedFireOn = update.fire_on ?? (existing.fire_on as string);
+  const mergedSendUntil =
+    update.send_until !== undefined
+      ? update.send_until
+      : (existing.send_until as string | null);
+  if (mergedSendUntil !== null) {
+    if (mergedSendUntil < mergedFireOn) {
+      return NextResponse.json(
+        { error: 'send_until cannot be before fire_on.' },
+        { status: 400 },
+      );
+    }
+    const span = daysBetweenIsoDates(mergedFireOn, mergedSendUntil);
+    if (span > MAX_REPEAT_DAYS) {
+      return NextResponse.json(
+        {
+          error: `send_until is ${span} days after fire_on; the maximum is ${MAX_REPEAT_DAYS} days.`,
+        },
+        { status: 400 },
+      );
+    }
   }
 
   const { data: updated, error: updErr } = await adb

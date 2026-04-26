@@ -16,8 +16,16 @@ import type { ScheduledReminder } from '@/types';
 //     not tomorrow morning").
 //
 // Allowed when status is 'pending' or 'failed'. Sent or cancelled
-// reminders are immutable. On success, the row flips to 'sent' and
+// reminders are immutable. On success the row flips to 'sent' and
 // fired_count is bumped so the audit trail reflects re-fires.
+//
+// Note for repeating reminders (send_until set): "Send now" is
+// treated as a TERMINAL fire — we end the schedule. If the admin
+// wanted "fire today AND continue tomorrow", they should just wait
+// for the daily cron, or fire-now and immediately schedule a fresh
+// row for the remaining days. We make this explicit in the UI
+// prompt rather than silently treating Send-Now as just-today.
+// last_fired_on is stamped so the cron doesn't double-fire today.
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -60,8 +68,17 @@ export async function POST(
   const senderName: string | null =
     creatorProfile?.full_name ?? auth.profile.full_name ?? null;
 
+  // Use the same per-day dedup key shape the cron uses, so a
+  // fire-now invocation after a cron run on the same day doesn't
+  // re-deliver via telegram (notify()'s ledger blocks the second
+  // attempt). Conversely, a fresh-day fire-now creates a new
+  // ledger row and re-delivers correctly.
+  const offsetMs = (5 * 60 + 30) * 60 * 1000;
+  const todayIst = new Date(Date.now() + offsetMs).toISOString().slice(0, 10);
+  const dedupRefId = `${existing.id}:${todayIst}`;
+
   try {
-    await notify('scheduled_reminder', existing.id, {
+    await notify('scheduled_reminder', dedupRefId, {
       reminderId: existing.id,
       title: existing.title,
       body: existing.body,
@@ -92,6 +109,7 @@ export async function POST(
     .update({
       status: 'sent',
       sent_at: new Date().toISOString(),
+      last_fired_on: todayIst,
       fired_count: (existing.fired_count ?? 0) + 1,
       error_message: null,
       last_actor: auth.user.id,
