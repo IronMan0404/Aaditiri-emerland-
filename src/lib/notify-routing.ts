@@ -83,6 +83,16 @@ export type NotificationPayloads = {
     requesterId: string;
     facilityName: string;
     whenLabel: string;
+    // Optional resident details so the admin Telegram message can
+    // show who's requesting (name, flat, phone) without the admin
+    // having to open the app. Caller (`/api/bookings`) populates
+    // these from the requester's profile. Older callers that don't
+    // set them gracefully degrade to the previous "facility/when
+    // only" message.
+    requesterName?: string | null;
+    requesterFlat?: string | null;
+    requesterPhone?: string | null;
+    notes?: string | null;
   };
   booking_decided: { bookingId: string; requesterId: string; approved: boolean };
 
@@ -430,26 +440,59 @@ export const ROUTING: RoutingTable = {
 
   booking_submitted: {
     audience: async ({ requesterId }, sb) => dedup([...(await allAdmins(sb)), requesterId]),
-    render: ({ bookingId, facilityName, whenLabel }) => ({
-      push: {
-        title: 'Booking request',
-        body: `${facilityName} · ${whenLabel}`,
-        url: '/admin/bookings',
-        tag: `booking:${bookingId}`,
-      },
-      telegram: {
-        text: [
-          '*Booking request*',
-          `Facility: *${md(facilityName)}*`,
-          `When: _${md(whenLabel)}_`,
-        ].join('\n'),
-        buttons: [
-          { text: 'Approve', callbackData: `bk:approve:${bookingId}` },
-          { text: 'Reject', callbackData: `bk:reject:${bookingId}` },
-          { text: 'Open in app', url: '/admin/bookings' },
-        ],
-      },
-    }),
+    render: ({
+      bookingId,
+      facilityName,
+      whenLabel,
+      requesterName,
+      requesterFlat,
+      requesterPhone,
+      notes,
+    }) => {
+      // Resident summary for the push body — keeps it under iOS's
+      // ~178-char body cap even with all fields populated.
+      const who = [
+        requesterName?.trim() || null,
+        requesterFlat ? `Flat ${requesterFlat}` : null,
+      ]
+        .filter(Boolean)
+        .join(' · ');
+      const pushBody = [`${facilityName} · ${whenLabel}`, who]
+        .filter(Boolean)
+        .join('\n');
+
+      // Telegram message — admins want to decide without leaving
+      // the chat, so we include name + flat + phone + any notes.
+      // Phone is shown as MarkdownV2 inline code so long-press →
+      // copy works on every Telegram client.
+      const tgLines: string[] = ['*Booking request*'];
+      if (requesterName) tgLines.push(`From: *${md(requesterName)}*`);
+      if (requesterFlat) tgLines.push(`Flat: *${md(requesterFlat)}*`);
+      if (requesterPhone) tgLines.push(`Phone: \`${md(requesterPhone)}\``);
+      tgLines.push(`Facility: *${md(facilityName)}*`);
+      tgLines.push(`When: _${md(whenLabel)}_`);
+      if (notes && notes.trim()) {
+        tgLines.push('');
+        tgLines.push(`_${md(clip(notes.trim(), 300))}_`);
+      }
+
+      return {
+        push: {
+          title: 'Booking request',
+          body: pushBody,
+          url: '/admin/bookings',
+          tag: `booking:${bookingId}`,
+        },
+        telegram: {
+          text: tgLines.join('\n'),
+          buttons: [
+            { text: 'Approve', callbackData: `bk:approve:${bookingId}` },
+            { text: 'Reject', callbackData: `bk:reject:${bookingId}` },
+            { text: 'Open in app', url: '/admin/bookings' },
+          ],
+        },
+      };
+    },
   },
 
   booking_decided: {

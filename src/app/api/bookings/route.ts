@@ -49,9 +49,12 @@ export async function POST(req: Request) {
   const user = authRes?.user;
   if (!user) return NextResponse.json({ error: 'Not signed in' }, { status: 401 });
 
+  // We pull `full_name` and `phone` here too so the admin Telegram
+  // / push notification can show "who's asking" (Flat 413 \u00b7 Bhargava
+  // \u00b7 +91…) without forcing the admin to open the app to triage.
   const { data: profile } = await supabase
     .from('profiles')
-    .select('id, flat_number')
+    .select('id, flat_number, full_name, phone')
     .eq('id', user.id)
     .single();
   if (!profile) return NextResponse.json({ error: 'Profile not found' }, { status: 404 });
@@ -147,6 +150,10 @@ export async function POST(req: Request) {
     requesterId: user.id,
     facilityName: facility.name,
     whenLabel: `${body.date} · ${body.time_slot}`,
+    requesterName: profile.full_name ?? null,
+    requesterFlat: profile.flat_number ?? null,
+    requesterPhone: profile.phone ?? null,
+    notes: body.notes ?? null,
   });
 
   return NextResponse.json({ ok: true, id: inserted.id });
