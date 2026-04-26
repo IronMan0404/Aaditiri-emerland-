@@ -159,6 +159,18 @@ export async function POST(req: Request) {
     notes: body.notes ?? null,
   });
 
+  // Resident-side echo. Goes to just the requester, with no admin
+  // buttons. Two distinct notifications by design — see the comment
+  // block at the top of src/lib/notify-routing.ts on the *_submitted
+  // / *_acknowledged split. The dedup ledger uses a different ref id
+  // (`-ack` suffix) so this never collides with the admin send.
+  notifyAfter('booking_acknowledged', `${inserted.id}-ack`, {
+    bookingId: inserted.id,
+    requesterId: user.id,
+    facilityName: facility.name,
+    whenLabel: `${body.date} · ${body.time_slot}`,
+  });
+
   // Mail the resident a "booking received" email with a TENTATIVE
   // ICS attached. Their calendar will hold the slot pending admin
   // approval; on approve we send a CONFIRMED update with the same

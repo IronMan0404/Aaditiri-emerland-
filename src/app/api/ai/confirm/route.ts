@@ -186,6 +186,15 @@ async function runCreateBooking(
     notes: args.notes,
   });
 
+  // Resident-side echo (mirrors /api/bookings POST). See the
+  // *_submitted / *_acknowledged split in src/lib/notify-routing.ts.
+  notifyAfter('booking_acknowledged', `${inserted.id}-ack`, {
+    bookingId: inserted.id,
+    requesterId: userId,
+    facilityName: facility.name,
+    whenLabel: `${args.date} · ${args.time_slot}`,
+  });
+
   const origin = req.headers.get('origin') || new URL(req.url).origin;
   mailBookingInviteAfter({
     phase: 'submit',

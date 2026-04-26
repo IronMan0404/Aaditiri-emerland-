@@ -122,5 +122,15 @@ export async function POST(req: Request) {
     months,
   });
 
+  // Resident-side echo. See the *_submitted / *_acknowledged split
+  // in src/lib/notify-routing.ts. Different ref id so the dedup
+  // ledger never collides with the admin send above.
+  notifyAfter('subscription_acknowledged', `${inserted.id}-ack`, {
+    subscriptionId: inserted.id,
+    requesterId: user.id,
+    tierName: tier.name,
+    months,
+  });
+
   return NextResponse.json({ ok: true, id: inserted.id });
 }

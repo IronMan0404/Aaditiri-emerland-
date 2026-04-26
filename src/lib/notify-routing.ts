@@ -80,14 +80,42 @@ export type NotificationPayloads = {
   };
   event_reminder: { eventId: string; userId: string; title: string; whenLabel: string };
 
-  // ---- approval flows: admins + requester echo --------------------
+  // ---- approval flows -----------------------------------------------
+  //
+  // Each approval flow now fires TWO notification kinds at submit time:
+  //
+  //   *_submitted / *_requested  → admins only (excluding the
+  //                                requester themselves, in case the
+  //                                requester is also an admin)
+  //   *_acknowledged             → just the requester, "your X is
+  //                                queued" copy. Plain confirmation,
+  //                                no admin-action buttons.
+  //
+  // Why two kinds instead of one with conditional copy: the renderer
+  // is a pure function of the payload, and it has no Supabase client
+  // to look up "is this user_id an admin?". Splitting them keeps the
+  // render() functions simple and lets each side dedup independently
+  // through the existing `notify()` ledger.
+  //
+  // For an admin who books their own clubhouse slot: the admin-card
+  // (with Approve/Reject buttons) goes to OTHER admins, and the admin
+  // themselves gets the resident-side "queued" card. Their own
+  // approval can still be done from the app — they don't get a
+  // self-approve button in their own DM.
   registration_submitted: { profileId: string; fullName: string; flatNumber: string | null };
+  registration_acknowledged: { profileId: string };
   registration_decided: { profileId: string; approved: boolean };
 
   subscription_requested: {
     subscriptionId: string;
     requesterId: string;
     flatNumber: string;
+    tierName: string;
+    months: number;
+  };
+  subscription_acknowledged: {
+    subscriptionId: string;
+    requesterId: string;
     tierName: string;
     months: number;
   };
@@ -115,6 +143,12 @@ export type NotificationPayloads = {
     requesterFlat?: string | null;
     requesterPhone?: string | null;
     notes?: string | null;
+  };
+  booking_acknowledged: {
+    bookingId: string;
+    requesterId: string;
+    facilityName: string;
+    whenLabel: string;
   };
   booking_decided: { bookingId: string; requesterId: string; approved: boolean };
 
@@ -250,8 +284,20 @@ async function allAdmins(supabase: SupabaseClient): Promise<string[]> {
   return (data ?? []).map((r: { id: string }) => r.id);
 }
 
-function dedup(ids: (string | null | undefined)[]): string[] {
-  return Array.from(new Set(ids.filter((x): x is string => Boolean(x))));
+/**
+ * Admins minus a given user id. Used by approval-submission kinds
+ * so an admin who books / requests a subscription / registers their
+ * own account doesn't receive the admin-action card alongside the
+ * resident "queued" card. They just get the resident card; OTHER
+ * admins get the admin card and can approve from there.
+ */
+async function adminsExcept(
+  supabase: SupabaseClient,
+  userId: string | null | undefined,
+): Promise<string[]> {
+  const admins = await allAdmins(supabase);
+  if (!userId) return admins;
+  return admins.filter((id) => id !== userId);
 }
 
 // ---------- Renderers ------------------------------------------------
@@ -403,7 +449,10 @@ export const ROUTING: RoutingTable = {
   // APPROVAL FLOWS — admins + requester echo
   // ────────────────────────────────────────────────────────────────
   registration_submitted: {
-    audience: async ({ profileId }, sb) => dedup([...(await allAdmins(sb)), profileId]),
+    // Admins only, excluding the new resident themselves (in case
+    // they were already an admin somehow — defensive). The resident
+    // gets `registration_acknowledged` separately.
+    audience: async ({ profileId }, sb) => adminsExcept(sb, profileId),
     render: ({ profileId, fullName, flatNumber }) => ({
       push: {
         title: 'New registration',
@@ -424,6 +473,27 @@ export const ROUTING: RoutingTable = {
           { text: 'Reject', callbackData: `reg:reject:${profileId}` },
           { text: 'Open profile', url: `/admin/users#${profileId}` },
         ],
+      },
+    }),
+  },
+
+  // Resident-side echo for a fresh registration. Plain confirmation,
+  // no buttons — the resident is mid-onboarding and can't act.
+  registration_acknowledged: {
+    audience: async ({ profileId }) => [profileId],
+    render: () => ({
+      push: {
+        title: 'Registration submitted',
+        body: 'Thanks! Your account is awaiting admin approval.',
+        url: '/auth/pending',
+        tag: 'registration-acknowledged',
+      },
+      telegram: {
+        text: [
+          '*Registration submitted*',
+          '_Your account is awaiting admin approval\\._',
+          'You\\\'ll get another message once a decision is made\\.',
+        ].join('\n'),
       },
     }),
   },
@@ -451,7 +521,11 @@ export const ROUTING: RoutingTable = {
   },
 
   subscription_requested: {
-    audience: async ({ requesterId }, sb) => dedup([...(await allAdmins(sb)), requesterId]),
+    // Admins only, excluding the requester themselves. The requester
+    // gets `subscription_acknowledged` separately so admins-who-book
+    // see the personal "queued" card instead of an Approve-yourself
+    // button on their own request.
+    audience: async ({ requesterId }, sb) => adminsExcept(sb, requesterId),
     render: ({ subscriptionId, flatNumber, tierName, months }) => ({
       push: {
         title: 'Clubhouse subscription request',
@@ -471,6 +545,29 @@ export const ROUTING: RoutingTable = {
           { text: 'Reject', callbackData: `sub:reject:${subscriptionId}` },
           { text: 'Open in app', url: '/admin/clubhouse' },
         ],
+      },
+    }),
+  },
+
+  // Resident-side echo for a clubhouse subscription request.
+  subscription_acknowledged: {
+    audience: async ({ requesterId }) => [requesterId],
+    render: ({ tierName, months }) => ({
+      push: {
+        title: 'Subscription request submitted',
+        body: `${tierName} · ${months} month${months === 1 ? '' : 's'}. Awaiting admin approval.`,
+        url: '/dashboard/clubhouse',
+        tag: 'subscription-acknowledged',
+      },
+      telegram: {
+        text: [
+          '*Subscription request submitted*',
+          `Tier: *${md(tierName)}*`,
+          `Duration: *${months} month${months === 1 ? '' : 's'}*`,
+          '',
+          '_Awaiting admin approval\\. You\\\'ll get another message once a decision is made\\._',
+        ].join('\n'),
+        buttons: [{ text: 'View in app', url: '/dashboard/clubhouse' }],
       },
     }),
   },
@@ -528,7 +625,11 @@ export const ROUTING: RoutingTable = {
   },
 
   booking_submitted: {
-    audience: async ({ requesterId }, sb) => dedup([...(await allAdmins(sb)), requesterId]),
+    // Admins only, excluding the requester themselves. The requester
+    // gets `booking_acknowledged` instead — that way an admin who
+    // books their own slot doesn't see an Approve button for their
+    // own request, just the resident "queued" confirmation.
+    audience: async ({ requesterId }, sb) => adminsExcept(sb, requesterId),
     render: ({
       bookingId,
       facilityName,
@@ -582,6 +683,30 @@ export const ROUTING: RoutingTable = {
         },
       };
     },
+  },
+
+  // Resident-side echo when a booking is created. Confirms the
+  // booking is in the queue without offering admin action buttons.
+  booking_acknowledged: {
+    audience: async ({ requesterId }) => [requesterId],
+    render: ({ bookingId, facilityName, whenLabel }) => ({
+      push: {
+        title: 'Booking submitted',
+        body: `${facilityName} · ${whenLabel}. Awaiting admin approval.`,
+        url: '/dashboard/bookings',
+        tag: `booking-acknowledged:${bookingId}`,
+      },
+      telegram: {
+        text: [
+          '*Booking submitted*',
+          `Facility: *${md(facilityName)}*`,
+          `When: _${md(whenLabel)}_`,
+          '',
+          '_Awaiting admin approval\\. You\\\'ll get another message once a decision is made\\._',
+        ].join('\n'),
+        buttons: [{ text: 'View bookings', url: '/dashboard/bookings' }],
+      },
+    }),
   },
 
   booking_decided: {

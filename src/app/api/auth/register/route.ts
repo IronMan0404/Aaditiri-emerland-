@@ -235,6 +235,15 @@ export async function POST(req: Request) {
       fullName,
       flatNumber,
     });
+    // Resident-side echo. In practice the brand-new account almost
+    // never has push or Telegram set up yet, so this is a near-noop
+    // for most signups — but it costs nothing to fire and matters
+    // for the rare case where a user was previously paired and is
+    // re-registering. See the *_submitted / *_acknowledged split in
+    // src/lib/notify-routing.ts.
+    notifyAfter('registration_acknowledged', `${userId}-ack`, {
+      profileId: userId,
+    });
   }
 
   if (Array.isArray(body.vehicles) && body.vehicles.length > 0) {
