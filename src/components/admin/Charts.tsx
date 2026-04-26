@@ -191,6 +191,70 @@ export function BarRows({ data, color = '#1B5E20', emptyMessage = 'No data' }: B
   );
 }
 
+interface BarHistogramProps {
+  data: { label: string; value: number }[];
+  height?: number;
+  color?: string;
+  // Optional formatter for tick labels under each bar. Defaults
+  // to showing every 4th label so a 24-bar chart doesn't get
+  // crowded on mobile.
+  showEveryNthLabel?: number;
+  // Formatter for the hover/aria value. Useful when value has
+  // a unit (e.g. "1.4 staff"). Defaults to the raw value.
+  formatValue?: (v: number) => string;
+  emptyMessage?: string;
+}
+
+// Vertical-bar histogram. The 24h shift-coverage chart is the
+// only caller right now but the API is generic enough for any
+// "value per discrete bucket" use case.
+export function BarHistogram({
+  data,
+  height = 110,
+  color = '#1B5E20',
+  showEveryNthLabel = 4,
+  formatValue,
+  emptyMessage = 'No data in this window',
+}: BarHistogramProps) {
+  if (data.length === 0) {
+    return <p className="text-xs text-gray-400 italic py-4 text-center">{emptyMessage}</p>;
+  }
+  const max = Math.max(...data.map((d) => d.value), 0.01);
+  const fmt = formatValue ?? ((v: number) => String(v));
+  return (
+    <div>
+      <div className="flex items-end gap-0.5" style={{ height }}>
+        {data.map((d, i) => {
+          const h = (d.value / max) * 100;
+          return (
+            <div
+              key={d.label}
+              className="flex-1 flex flex-col justify-end items-center group"
+              title={`${d.label}: ${fmt(d.value)}`}
+              aria-label={`${d.label}: ${fmt(d.value)}`}
+            >
+              <div
+                className="w-full rounded-t transition-all"
+                style={{
+                  height: `${h}%`,
+                  minHeight: d.value > 0 ? 1 : 0,
+                  backgroundColor: color,
+                  opacity: d.value > 0 ? 0.85 : 0.15,
+                }}
+              />
+              {i % showEveryNthLabel === 0 && (
+                <span className="text-[9px] text-gray-400 mt-1 tabular-nums">
+                  {d.label}
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 interface KpiTileProps {
   label: string;
   value: string | number;

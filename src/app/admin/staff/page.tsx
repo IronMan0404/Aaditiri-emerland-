@@ -21,10 +21,19 @@ import {
   Loader2,
   PowerOff,
   Power,
+  AlertCircle,
+  TrendingUp,
+  Activity,
 } from 'lucide-react';
 import Modal from '@/components/ui/Modal';
 import Button from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
+import {
+  KpiTile,
+  LineChart,
+  BarRows,
+  BarHistogram,
+} from '@/components/admin/Charts';
 
 // /admin/staff
 //
@@ -896,9 +905,307 @@ function AttendanceView({ staff, loading, nowMs, onRefresh }: AttendanceViewProp
         )}
       </div>
 
+      {/* Analytics block (KPIs + charts + per-staff hours) */}
+      <StaffAnalyticsBlock />
+
       <div className="bg-blue-50 border border-blue-200 rounded-xl p-2.5 text-[11px] text-blue-800 leading-snug">
         <strong>Tip:</strong> A staff member is &quot;on duty&quot; when they&apos;ve tapped Check
-        In and haven&apos;t yet checked out. Per-day attendance reports come in V2.
+        In and haven&apos;t yet checked out. Open shifts count toward today&apos;s hours up to the
+        current moment.
+      </div>
+    </div>
+  );
+}
+
+// ─── Analytics block (lives at the bottom of the Attendance tab) ─
+
+type AnalyticsRange = 7 | 30 | 90;
+
+interface AnalyticsResp {
+  days: number;
+  window: { start: string; end: string };
+  kpis: {
+    activeStaffTotal: number;
+    activeSecurity: number;
+    activeHousekeeping: number;
+    onDutyNow: number;
+    onDutySecurity: number;
+    onDutyHousekeeping: number;
+    checkedInToday: number;
+    avgDailyHours: number;
+    totalWindowHours: number;
+  };
+  todayGrid: Array<{
+    id: string;
+    full_name: string;
+    staff_role: StaffRole;
+    first_check_in_at: string | null;
+    on_duty_now: boolean;
+  }>;
+  hoursTrend: Array<{
+    date: string;
+    security: number;
+    housekeeping: number;
+    total: number;
+  }>;
+  hoursPerStaff: Array<{
+    id: string;
+    full_name: string;
+    staff_role: StaffRole | null;
+    hours: number;
+    shifts: number;
+  }>;
+  hourCoverage: Array<{ hour: number; avg_staff: number }>;
+}
+
+function StaffAnalyticsBlock() {
+  const [range, setRange] = useState<AnalyticsRange>(30);
+  const [data, setData] = useState<AnalyticsResp | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async (days: AnalyticsRange) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const resp = await fetch(`/api/admin/staff/analytics?days=${days}`, {
+        cache: 'no-store',
+      });
+      if (!resp.ok) {
+        const j = await resp.json().catch(() => ({}));
+        throw new Error(j.error ?? `HTTP ${resp.status}`);
+      }
+      const j = (await resp.json()) as AnalyticsResp;
+      setData(j);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load analytics');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load(range);
+  }, [load, range]);
+
+  if (loading && !data) {
+    return (
+      <div className="bg-white rounded-2xl p-6 shadow-sm flex items-center justify-center text-sm text-gray-400 gap-2">
+        <Loader2 className="animate-spin" size={16} /> Loading analytics…
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="bg-rose-50 border border-rose-200 rounded-2xl p-3 text-xs text-rose-800 flex items-start gap-2">
+        <AlertCircle size={14} className="mt-0.5 shrink-0" />
+        <div className="flex-1">
+          <p className="font-semibold">Couldn&apos;t load analytics</p>
+          <p className="text-rose-700/80">{error}</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => load(range)}
+          className="text-xs font-semibold underline"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+
+  if (!data) return null;
+
+  const k = data.kpis;
+  const hoursLabel =
+    range === 7 ? 'last 7 days' : range === 30 ? 'last 30 days' : 'last 90 days';
+
+  // Trend chart prefers a single overall line — split-by-role is in the
+  // hoursPerStaff bar list and that's enough on a small mobile viewport.
+  const trendData = data.hoursTrend.map((d) => ({ date: d.date, value: d.total }));
+
+  const hoursPerStaffData = data.hoursPerStaff.slice(0, 8).map((s) => ({
+    label: `${s.full_name}${s.staff_role === 'security' ? ' \u00b7 S' : s.staff_role === 'housekeeping' ? ' \u00b7 H' : ''}`,
+    value: s.hours,
+  }));
+
+  const coverageData = data.hourCoverage.map((c) => ({
+    label: String(c.hour).padStart(2, '0'),
+    value: c.avg_staff,
+  }));
+
+  return (
+    <div className="space-y-3">
+      {/* Range picker + heading */}
+      <div className="flex items-center gap-2 px-1">
+        <TrendingUp size={14} className="text-gray-500" />
+        <h3 className="text-xs font-bold text-gray-700 uppercase tracking-wider">
+          Analytics
+        </h3>
+        <div className="ml-auto flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
+          {([7, 30, 90] as const).map((d) => (
+            <button
+              key={d}
+              type="button"
+              onClick={() => setRange(d)}
+              className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-colors ${
+                range === d ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              {d}d
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* KPI strip */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <KpiTile
+          label="Active staff"
+          value={k.activeStaffTotal}
+          hint={`${k.activeSecurity} sec \u00b7 ${k.activeHousekeeping} hk`}
+        />
+        <KpiTile
+          label="On duty now"
+          value={k.onDutyNow}
+          tone={k.onDutyNow > 0 ? 'good' : 'default'}
+          hint={`${k.onDutySecurity} sec \u00b7 ${k.onDutyHousekeeping} hk`}
+        />
+        <KpiTile
+          label="Checked in today"
+          value={`${k.checkedInToday}/${k.activeStaffTotal}`}
+          tone={
+            k.activeStaffTotal === 0 ? 'default'
+            : k.checkedInToday === k.activeStaffTotal ? 'good'
+            : k.checkedInToday === 0 ? 'bad'
+            : 'warn'
+          }
+        />
+        <KpiTile
+          label="Avg daily hours"
+          value={k.avgDailyHours}
+          hint={`total ${k.totalWindowHours}h \u00b7 ${hoursLabel}`}
+        />
+      </div>
+
+      {/* Today's attendance grid */}
+      <div className="bg-white rounded-2xl p-3 shadow-sm">
+        <div className="flex items-center gap-2 mb-2">
+          <CalIcon size={13} className="text-gray-500" />
+          <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wider">
+            Today&apos;s attendance
+          </h4>
+          <span className="ml-auto text-[10px] text-gray-400">
+            {data.window.end}
+          </span>
+        </div>
+        {data.todayGrid.length === 0 ? (
+          <p className="text-xs text-gray-400 italic py-2">
+            No active staff yet.
+          </p>
+        ) : (
+          <ul className="divide-y divide-gray-100 -mx-1">
+            {data.todayGrid.map((s) => {
+              const badge = ROLE_BADGE[s.staff_role];
+              const checkedIn = !!s.first_check_in_at;
+              return (
+                <li
+                  key={s.id}
+                  className="px-1 py-1.5 flex items-center gap-2"
+                >
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                      s.on_duty_now ? 'bg-emerald-500' : checkedIn ? 'bg-gray-300' : 'bg-rose-400'
+                    }`}
+                    aria-label={
+                      s.on_duty_now ? 'On duty' : checkedIn ? 'Checked in earlier' : 'Absent'
+                    }
+                  />
+                  <p className="text-xs font-medium text-gray-800 truncate flex-1">
+                    {s.full_name}
+                  </p>
+                  <span
+                    className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full border ${badge.cls}`}
+                  >
+                    {s.staff_role === 'security' ? 'S' : 'H'}
+                  </span>
+                  <p className={`text-[10px] tabular-nums shrink-0 w-14 text-right ${
+                    s.on_duty_now ? 'text-emerald-700 font-semibold'
+                    : checkedIn ? 'text-gray-500'
+                    : 'text-rose-500 italic'
+                  }`}>
+                    {checkedIn ? formatTime(s.first_check_in_at) : 'absent'}
+                  </p>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        <div className="flex items-center gap-3 mt-2 pt-2 border-t border-gray-100 text-[10px] text-gray-500">
+          <span className="flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> On duty
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-gray-300" /> Checked in
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-rose-400" /> Absent
+          </span>
+        </div>
+      </div>
+
+      {/* Hours trend */}
+      <div className="bg-white rounded-2xl p-3 shadow-sm">
+        <div className="flex items-center gap-2 mb-2">
+          <Activity size={13} className="text-gray-500" />
+          <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wider">
+            Hours on duty &middot; {hoursLabel}
+          </h4>
+        </div>
+        <LineChart data={trendData} height={100} />
+      </div>
+
+      {/* 24h shift coverage */}
+      <div className="bg-white rounded-2xl p-3 shadow-sm">
+        <div className="flex items-center gap-2 mb-2">
+          <Clock size={13} className="text-gray-500" />
+          <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wider">
+            Average coverage by hour (IST)
+          </h4>
+        </div>
+        <BarHistogram
+          data={coverageData}
+          height={90}
+          color="#1B5E20"
+          showEveryNthLabel={4}
+          formatValue={(v) => `${v} staff`}
+        />
+        <p className="text-[10px] text-gray-400 mt-1.5 leading-snug">
+          Average number of staff simultaneously on duty during each
+          IST hour over the {hoursLabel}. Helps spot uncovered windows
+          (typically pre-dawn).
+        </p>
+      </div>
+
+      {/* Per-staff hours (top 8) */}
+      <div className="bg-white rounded-2xl p-3 shadow-sm">
+        <div className="flex items-center gap-2 mb-2">
+          <UserCog size={13} className="text-gray-500" />
+          <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wider">
+            Hours by staff &middot; {hoursLabel}
+          </h4>
+          {data.hoursPerStaff.length > 8 && (
+            <span className="ml-auto text-[10px] text-gray-400">
+              top 8 of {data.hoursPerStaff.length}
+            </span>
+          )}
+        </div>
+        <BarRows
+          data={hoursPerStaffData}
+          color="#1B5E20"
+          emptyMessage="No attendance recorded in this window."
+        />
       </div>
     </div>
   );
