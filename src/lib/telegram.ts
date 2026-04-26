@@ -142,8 +142,13 @@ async function sendOne(chatId: number, payload: TelegramPayload): Promise<{
   const res = await callTelegram('sendMessage', body);
   if (res.ok) return { ok: true, blocked: false };
 
-  // 403 means the user blocked the bot. Their chat_id is dead — we
-  // soft-deactivate the link so future fan-outs skip them.
+  // Surface the API error so audit rows aren't silent black holes.
+  // We only log to the function's stderr; if you need it persisted,
+  // pipe it into notify-events. error_code 403 = user blocked the
+  // bot; their chat_id is dead and we soft-deactivate the link.
+  console.error(
+    `[telegram] sendMessage chat=${chatId} failed: ${res.error_code ?? '?'} ${res.description ?? 'no description'}`,
+  );
   const blocked = res.error_code === 403;
   return { ok: false, blocked };
 }

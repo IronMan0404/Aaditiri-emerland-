@@ -123,12 +123,23 @@ async function writeAudit(
 //
 // Resolution order:
 //   1. NEXT_PUBLIC_APP_URL (explicit, recommended).
-//   2. VERCEL_URL (auto-set by Vercel — only needs `https://`).
-//   3. TELEGRAM_WEBHOOK_URL (already absolute, points at the same
+//   2. VERCEL_PROJECT_PRODUCTION_URL (auto-set on Vercel for
+//      production deploys — survives across preview deploys, unlike
+//      VERCEL_URL which changes per deploy hash).
+//   3. VERCEL_URL (auto-set by Vercel — only needs `https://`).
+//   4. TELEGRAM_WEBHOOK_URL (already absolute, points at the same
 //      deploy).
+//   5. PROD_FALLBACK — hardcoded production URL. Last-ditch safety
+//      net so a misconfigured env doesn't silently kill every
+//      Telegram notification with "URL host is empty". If you fork
+//      this app, change PROD_FALLBACK or unset it.
+const PROD_FALLBACK = 'https://aaditiri-emerland-neon.vercel.app';
+
 function getPublicOrigin(): string | null {
   const explicit = process.env.NEXT_PUBLIC_APP_URL?.trim();
   if (explicit) return explicit.replace(/\/$/, '');
+  const prodUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim();
+  if (prodUrl) return `https://${prodUrl.replace(/^https?:\/\//i, '').replace(/\/$/, '')}`;
   const vercel = process.env.VERCEL_URL?.trim();
   if (vercel) return `https://${vercel.replace(/^https?:\/\//i, '').replace(/\/$/, '')}`;
   const webhook = process.env.TELEGRAM_WEBHOOK_URL?.trim();
@@ -139,7 +150,7 @@ function getPublicOrigin(): string | null {
       // fall through
     }
   }
-  return null;
+  return PROD_FALLBACK || null;
 }
 
 function absolutize(pathOrUrl: string): string {
@@ -394,7 +405,15 @@ async function sendTelegramWithMixedButtons(
         reply_markup: { inline_keyboard: inlineKeyboard },
       });
       if (res.ok) sent += 1;
-      else failed += 1;
+      else {
+        failed += 1;
+        // Surface the failure reason — audit row currently doesn't
+        // store per-recipient detail, so this is the only place we
+        // can see WHY a Telegram send failed without re-running it.
+        console.error(
+          `[notify] mixed-buttons send chat=${row.chat_id} kind=${dedup.kind} failed: ${res.error_code ?? '?'} ${res.description ?? 'no description'}`,
+        );
+      }
     }),
   );
 
