@@ -36,6 +36,7 @@ import {
   AlertCircle,
   RotateCcw,
   X,
+  ShieldCheck,
 } from 'lucide-react';
 
 interface Resident {
@@ -45,6 +46,10 @@ interface Resident {
   phone: string | null;
   resident_type: 'owner' | 'tenant' | null;
   is_approved: boolean;
+  // 'user' for residents, 'admin' for society office bearers.
+  // Older API builds may omit this field — the UI treats a
+  // missing value as 'user' so it degrades gracefully.
+  role?: 'user' | 'admin';
 }
 
 interface ResidentsResponse {
@@ -180,15 +185,16 @@ export default function StaffResidentsPage() {
           </div>
           <div className="min-w-0">
             <p className="text-xs uppercase tracking-wider text-white/80">
-              Resident directory
+              Society directory
             </p>
             <h1 className="text-lg font-bold leading-tight truncate">
-              Read-only lookup
+              Residents &amp; admins
             </h1>
           </div>
         </div>
         <p className="text-[11px] text-white/80 leading-relaxed">
-          Search by name, flat, or phone. Tap a phone number to call.
+          Search by name, flat, or phone. Tap to call. Admins are pinned to the
+          top so you always know who to escalate to.
         </p>
       </div>
 
@@ -201,7 +207,7 @@ export default function StaffResidentsPage() {
             inputMode="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search residents…"
+            placeholder="Search residents or admins…"
             className="flex-1 text-sm bg-transparent outline-none placeholder:text-gray-400"
           />
           {query && (
@@ -230,7 +236,7 @@ export default function StaffResidentsPage() {
       <div className="bg-white rounded-2xl shadow-sm overflow-hidden">
         {loading && residents.length === 0 ? (
           <div className="flex items-center justify-center py-10 text-gray-400 text-sm gap-2">
-            <Loader2 className="animate-spin" size={16} /> Loading residents…
+            <Loader2 className="animate-spin" size={16} /> Loading directory…
           </div>
         ) : error ? (
           <div className="flex items-start gap-2 p-4 text-rose-700 text-sm bg-rose-50">
@@ -240,54 +246,84 @@ export default function StaffResidentsPage() {
         ) : residents.length === 0 ? (
           <div className="text-center py-10 text-gray-400 text-sm">
             {debouncedQuery
-              ? `No residents match "${debouncedQuery}".`
-              : 'No residents to show.'}
+              ? `No matches for "${debouncedQuery}".`
+              : 'Nobody to show yet.'}
           </div>
         ) : (
           <ul className="divide-y divide-gray-100">
-            {residents.map((r) => (
-              <li key={r.id} className="px-4 py-3 flex items-start gap-3">
-                <div className="w-9 h-9 rounded-full bg-[#1B5E20]/10 text-[#1B5E20] text-xs font-bold flex items-center justify-center shrink-0">
-                  {initialsOf(r.full_name)}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <p className="text-sm font-semibold text-gray-900 truncate">
-                      {r.full_name}
-                    </p>
-                    {r.resident_type && (
-                      <span
-                        className={`text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full ${
-                          r.resident_type === 'owner'
-                            ? 'bg-emerald-50 text-emerald-700'
-                            : 'bg-amber-50 text-amber-700'
-                        }`}
-                      >
-                        {r.resident_type}
-                      </span>
+            {residents.map((r) => {
+              const isAdmin = r.role === 'admin';
+              return (
+                <li
+                  key={r.id}
+                  className={`px-4 py-3 flex items-start gap-3 ${
+                    isAdmin ? 'bg-amber-50/40' : ''
+                  }`}
+                >
+                  <div
+                    className={`w-9 h-9 rounded-full text-xs font-bold flex items-center justify-center shrink-0 ${
+                      isAdmin
+                        ? 'bg-amber-100 text-amber-700 ring-2 ring-amber-200'
+                        : 'bg-[#1B5E20]/10 text-[#1B5E20]'
+                    }`}
+                  >
+                    {isAdmin ? (
+                      <ShieldCheck size={16} />
+                    ) : (
+                      initialsOf(r.full_name)
                     )}
                   </div>
-                  <p className="text-xs text-gray-500 flex items-center gap-1 mt-0.5">
-                    <Home size={11} className="shrink-0" />
-                    {r.flat_number || (
-                      <span className="italic text-gray-400">No flat</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-sm font-semibold text-gray-900 truncate">
+                        {r.full_name}
+                      </p>
+                      {isAdmin ? (
+                        <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 inline-flex items-center gap-0.5">
+                          <ShieldCheck size={10} /> Admin
+                        </span>
+                      ) : (
+                        r.resident_type && (
+                          <span
+                            className={`text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full ${
+                              r.resident_type === 'owner'
+                                ? 'bg-emerald-50 text-emerald-700'
+                                : 'bg-amber-50 text-amber-700'
+                            }`}
+                          >
+                            {r.resident_type}
+                          </span>
+                        )
+                      )}
+                    </div>
+                    {!isAdmin || r.flat_number ? (
+                      <p className="text-xs text-gray-500 flex items-center gap-1 mt-0.5">
+                        <Home size={11} className="shrink-0" />
+                        {r.flat_number || (
+                          <span className="italic text-gray-400">No flat</span>
+                        )}
+                      </p>
+                    ) : (
+                      <p className="text-[11px] text-amber-700 mt-0.5 italic">
+                        Society office bearer
+                      </p>
                     )}
-                  </p>
-                  {r.phone ? (
-                    <a
-                      href={`tel:${r.phone}`}
-                      className="inline-flex items-center gap-1 mt-1 text-xs text-[#1B5E20] font-medium hover:underline"
-                    >
-                      <Phone size={11} /> {r.phone}
-                    </a>
-                  ) : (
-                    <p className="text-[11px] text-gray-400 italic mt-1">
-                      No phone on file
-                    </p>
-                  )}
-                </div>
-              </li>
-            ))}
+                    {r.phone ? (
+                      <a
+                        href={`tel:${r.phone}`}
+                        className="inline-flex items-center gap-1 mt-1 text-xs text-[#1B5E20] font-medium hover:underline"
+                      >
+                        <Phone size={11} /> {r.phone}
+                      </a>
+                    ) : (
+                      <p className="text-[11px] text-gray-400 italic mt-1">
+                        No phone on file
+                      </p>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         )}
 

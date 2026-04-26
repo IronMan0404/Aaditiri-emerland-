@@ -6,10 +6,15 @@ import { createAdminSupabaseClient } from '@/lib/supabase-admin';
 //
 // GET ?q=&page=&pageSize=
 //   Returns a privacy-preserving projection of approved residents
-//   (full_name, flat_number, phone, resident_type, is_approved)
-//   for staff and admin clients. Backed by the
-//   public.staff_visible_residents() SECURITY DEFINER function,
-//   which is also gated to role IN (staff, admin) at the DB level.
+//   AND admins (full_name, flat_number, phone, resident_type,
+//   is_approved, role) for staff and admin clients. Admins are
+//   included since 2026-05-14 so on-duty staff can see who to
+//   escalate to. Other staff members are intentionally excluded
+//   so peers don't see each other's contact details.
+//
+//   Backed by the public.staff_visible_residents() SECURITY DEFINER
+//   function, which is also gated to role IN (staff, admin) at the
+//   DB level.
 //
 // We additionally enforce the role check at the API layer so
 // that a curious non-staff caller gets a clean 403 (instead of an

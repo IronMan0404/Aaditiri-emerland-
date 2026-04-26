@@ -2311,12 +2311,10 @@ create policy "Staff manage own attendance"
 -- STAFF RESIDENT DIRECTORY (read-only)
 -- ============================================================
 -- See migrations/20260512_staff_resident_directory.sql for the
--- full rationale. Short version: staff (security + housekeeping)
--- need to look up resident name + flat + phone to do their job,
--- but giving them direct SELECT on profiles would also expose
--- email, push tokens, role flags etc. We expose just the four
--- needed columns through a SECURITY DEFINER function gated by an
--- in-body role check.
+-- original rationale, and 20260514_staff_directory_include_admins.sql
+-- for the May 2026 update that brought admins into the projection
+-- so staff can escalate. Staff-on-staff visibility is intentionally
+-- excluded — that's a peer-privacy decision we keep conservative.
 -- ============================================================
 create or replace function public.staff_visible_residents(
   search_query text default null,
@@ -2329,7 +2327,8 @@ returns table (
   flat_number   text,
   phone         text,
   resident_type text,
-  is_approved   boolean
+  is_approved   boolean,
+  role          text
 )
 language sql
 security definer
@@ -2348,20 +2347,22 @@ as $func$
     p.flat_number,
     p.phone,
     p.resident_type,
-    p.is_approved
+    p.is_approved,
+    p.role
   from public.profiles p, caller
   where caller.role in ('staff', 'admin')
     and p.is_approved = true
     and p.is_bot = false
-    and p.role = 'user'
+    and p.role in ('user', 'admin')
     and (
       search_query is null
       or search_query = ''
       or p.full_name   ilike '%' || search_query || '%'
-      or p.flat_number ilike '%' || search_query || '%'
-      or p.phone       ilike '%' || search_query || '%'
+      or coalesce(p.flat_number, '') ilike '%' || search_query || '%'
+      or coalesce(p.phone, '')       ilike '%' || search_query || '%'
     )
   order by
+    case when p.role = 'admin' then 0 else 1 end,
     p.flat_number nulls last,
     p.full_name asc
   limit greatest(1, least(page_size, 200))
@@ -2373,7 +2374,7 @@ revoke all on function public.staff_visible_residents(text, int, int) from anon;
 grant execute on function public.staff_visible_residents(text, int, int) to authenticated;
 
 comment on function public.staff_visible_residents(text, int, int) is
-  'Returns a privacy-preserving projection of approved residents (name, flat, phone, type) for use by staff and admin clients only. Caller-side role gate inside the function body restricts to role IN (staff, admin). Bypasses RLS on profiles via SECURITY DEFINER but does NOT expose email, role, or other sensitive columns.';
+  'Returns a privacy-preserving projection of approved residents AND admins (name, flat, phone, type, role) for use by staff and admin clients only. Caller-side role gate inside the function body restricts to role IN (staff, admin). Bypasses RLS on profiles via SECURITY DEFINER but does NOT expose email or any other sensitive columns. Excludes role=''staff'' rows so peers don''t see each other.';
 
 
 -- ============================================================
