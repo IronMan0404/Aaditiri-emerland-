@@ -114,16 +114,50 @@ async function writeAudit(
   }
 }
 
+// Resolve a public origin we can safely prepend to relative paths
+// for push `url` and Telegram inline-button URLs. Telegram REJECTS
+// the entire message if any inline-button URL has no host (HTTP
+// 400 "URL host is empty"), so a missing env var here used to
+// silently drop every Telegram notification on a fresh Vercel
+// deploy until someone explicitly set NEXT_PUBLIC_APP_URL.
+//
+// Resolution order:
+//   1. NEXT_PUBLIC_APP_URL (explicit, recommended).
+//   2. VERCEL_URL (auto-set by Vercel — only needs `https://`).
+//   3. TELEGRAM_WEBHOOK_URL (already absolute, points at the same
+//      deploy).
+function getPublicOrigin(): string | null {
+  const explicit = process.env.NEXT_PUBLIC_APP_URL?.trim();
+  if (explicit) return explicit.replace(/\/$/, '');
+  const vercel = process.env.VERCEL_URL?.trim();
+  if (vercel) return `https://${vercel.replace(/^https?:\/\//i, '').replace(/\/$/, '')}`;
+  const webhook = process.env.TELEGRAM_WEBHOOK_URL?.trim();
+  if (webhook) {
+    try {
+      return new URL(webhook).origin;
+    } catch {
+      // fall through
+    }
+  }
+  return null;
+}
+
 function absolutize(pathOrUrl: string): string {
   if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
-  const base = (process.env.NEXT_PUBLIC_APP_URL || '').replace(/\/$/, '');
+  const base = getPublicOrigin();
   return base ? `${base}${pathOrUrl}` : pathOrUrl;
 }
 
+// Telegram inline buttons require absolute URLs — a relative href
+// makes the entire sendMessage call fail with HTTP 400. Drop any
+// button we can't absolutise so the rest of the message (text +
+// callback buttons) still goes through.
 function absolutizeButtons(
   buttons: { text: string; url: string }[],
 ): { text: string; url: string }[] {
-  return buttons.map((b) => ({ text: b.text, url: absolutize(b.url) }));
+  return buttons
+    .map((b) => ({ text: b.text, url: absolutize(b.url) }))
+    .filter((b) => /^https?:\/\//i.test(b.url));
 }
 
 export async function notify<K extends NotificationKind>(
