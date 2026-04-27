@@ -69,9 +69,14 @@ create table if not exists public.events (
   location text not null,
   image_url text,
   max_attendees integer,
+  is_pinned boolean not null default false,
   created_by uuid references public.profiles(id) on delete set null,
   created_at timestamptz not null default now()
 );
+
+create index if not exists events_is_pinned_idx
+  on public.events (is_pinned)
+  where is_pinned = true;
 
 -- EVENT RSVPs
 create table if not exists public.event_rsvps (
@@ -433,11 +438,13 @@ create trigger trg_bookings_block_resident_column_edits
 -- ANNOUNCEMENTS policies
 create policy "Announcements viewable by all authenticated" on public.announcements for select to authenticated using (true);
 create policy "Only admins can insert announcements" on public.announcements for insert to authenticated with check (exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'));
+create policy "Only admins can update announcements" on public.announcements for update to authenticated using (exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')) with check (exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'));
 create policy "Only admins can delete announcements" on public.announcements for delete to authenticated using (exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'));
 
 -- EVENTS policies
 create policy "Events viewable by all authenticated" on public.events for select to authenticated using (true);
 create policy "Only admins can create events" on public.events for insert to authenticated with check (exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'));
+create policy "Only admins can update events" on public.events for update to authenticated using (exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')) with check (exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'));
 create policy "Only admins can delete events" on public.events for delete to authenticated using (exists (select 1 from public.profiles where id = auth.uid() and role = 'admin'));
 
 -- EVENT RSVPs policies

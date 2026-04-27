@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { Plus, Pin, Trash2, Megaphone } from 'lucide-react';
+import { Plus, Pin, PinOff, Trash2, Megaphone } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { createClient } from '@/lib/supabase';
 import { useAuth } from '@/hooks/useAuth';
@@ -65,6 +65,31 @@ export default function AnnouncementsPage() {
     fetch();
   }
 
+  // Optimistic pin/unpin: flip the flag locally first so the row jumps
+  // to / from the top instantly, then reconcile with the server. If the
+  // RLS UPDATE fails (e.g. policy not yet applied on a stale DB) we
+  // roll back and surface the real error so it can be debugged.
+  async function handleTogglePin(a: Announcement) {
+    const next = !a.is_pinned;
+    setItems((prev) =>
+      [...prev.map((x) => (x.id === a.id ? { ...x, is_pinned: next } : x))]
+        .sort((p, q) => {
+          if (p.is_pinned !== q.is_pinned) return p.is_pinned ? -1 : 1;
+          return q.created_at.localeCompare(p.created_at);
+        })
+    );
+    const { error } = await supabase
+      .from('announcements')
+      .update({ is_pinned: next })
+      .eq('id', a.id);
+    if (error) {
+      toast.error(error.message || 'Could not update pin');
+      fetch();
+      return;
+    }
+    toast.success(next ? 'Pinned to top' : 'Unpinned');
+  }
+
   return (
     <div className="max-w-2xl mx-auto px-4 py-6">
       <div className="flex items-start justify-between gap-3 mb-5">
@@ -104,14 +129,29 @@ export default function AnnouncementsPage() {
                   </div>
                 </div>
                 {isAdmin && (
-                  <button
-                    type="button"
-                    onClick={() => handleDelete(a.id)}
-                    className="text-gray-300 hover:text-red-500 transition-colors mt-0.5 p-1 -m-1"
-                    aria-label="Delete announcement"
-                  >
-                    <Trash2 size={16} />
-                  </button>
+                  <div className="flex items-center gap-1 mt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => handleTogglePin(a)}
+                      className={`transition-colors p-1 -m-1 ${
+                        a.is_pinned
+                          ? 'text-amber-500 hover:text-amber-600'
+                          : 'text-gray-300 hover:text-amber-500'
+                      }`}
+                      title={a.is_pinned ? 'Unpin announcement' : 'Pin announcement to the top'}
+                      aria-label={a.is_pinned ? 'Unpin announcement' : 'Pin announcement'}
+                    >
+                      {a.is_pinned ? <PinOff size={16} /> : <Pin size={16} />}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDelete(a.id)}
+                      className="text-gray-300 hover:text-red-500 transition-colors p-1 -m-1"
+                      aria-label="Delete announcement"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
                 )}
               </div>
             </div>

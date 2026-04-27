@@ -39,6 +39,7 @@ export interface Event {
   image_url?: string;
   created_by: string;
   max_attendees?: number;
+  is_pinned: boolean;
   created_at: string;
   profiles?: { full_name: string };
   event_rsvps?: { id: string; user_id: string; status: string }[];

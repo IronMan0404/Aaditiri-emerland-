@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { Plus, MapPin, Clock, Calendar, Users, Trash2, Check, HelpCircle, X } from 'lucide-react';
+import { Plus, MapPin, Clock, Calendar, Users, Trash2, Check, HelpCircle, X, Pin, PinOff } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { createClient } from '@/lib/supabase';
 import { useAuth } from '@/hooks/useAuth';
@@ -48,23 +48,41 @@ export default function EventsPage() {
 
   const fetch = async () => {
     // Pull everything (incl. past events so admins can prune them) and sort
-    // client-side: upcoming events first (soonest at top), then past events
-    // (most recent at top). Plain `order('date')` was putting old events
-    // above new ones, which the admin team complained about.
-    const { data } = await supabase
+    // client-side: pinned events first, then upcoming events (soonest at
+    // top), then past events (most recent at top). Plain `order('date')`
+    // was putting old events above new ones, which the admin team
+    // complained about. We also surface any error from supabase-js so a
+    // hidden RLS / network failure doesn't silently produce an empty list
+    // (which is what was happening when an admin reported "I created an
+    // event but it never showed up").
+    // Disambiguate the `profiles` embed: PostgREST sees TWO paths from
+    // events → profiles (events.created_by → profiles, plus the indirect
+    // path via event_reminders_sent.user_id → profiles) and refuses to
+    // pick one without an explicit FK hint. Without the !FK suffix the
+    // entire SELECT fails with "Could not embed because more than one
+    // relationship was found", which was the real reason newly-created
+    // events appeared to vanish from the list.
+    const { data, error } = await supabase
       .from('events')
-      .select('*, profiles(full_name), event_rsvps(id, user_id, status)');
+      .select('*, profiles!events_created_by_fkey(full_name), event_rsvps(id, user_id, status)');
+    if (error) {
+      console.error('[events] fetch failed', error);
+      toast.error(`Could not load events: ${error.message}`);
+      setLoading(false);
+      return;
+    }
     if (data) {
-      const today = new Date().toISOString().slice(0, 10);
+      // Use the IST date so a 9pm-IST admin doesn't see today's event
+      // marked as "Past" just because the UTC clock has rolled over.
+      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
       const sorted = [...data].sort((a, b) => {
+        if (a.is_pinned !== b.is_pinned) return a.is_pinned ? -1 : 1;
         const aPast = a.date < today;
         const bPast = b.date < today;
-        if (aPast !== bPast) return aPast ? 1 : -1; // upcoming before past
+        if (aPast !== bPast) return aPast ? 1 : -1;
         if (aPast) {
-          // both past: most recent past first
           return b.date.localeCompare(a.date);
         }
-        // both upcoming: soonest first
         return a.date.localeCompare(b.date);
       });
       setEvents(sorted);
@@ -102,18 +120,37 @@ export default function EventsPage() {
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
     if (!form.title || !form.date || !form.time || !form.location) { toast.error('Fill required fields'); return; }
+    if (!profile?.id) { toast.error('Still loading your profile, try again in a moment.'); return; }
     setSaving(true);
+    const eventPayload = {
+      title: form.title.trim(),
+      description: form.description.trim() || null,
+      date: form.date,
+      time: form.time,
+      location: form.location.trim(),
+      max_attendees: form.max_attendees ? parseInt(form.max_attendees, 10) : null,
+      created_by: profile.id,
+    };
     const { data: inserted, error } = await supabase
       .from('events')
-      .insert({ ...form, max_attendees: form.max_attendees ? parseInt(form.max_attendees) : null, created_by: profile?.id })
+      .insert(eventPayload)
       .select('id')
       .single();
     setSaving(false);
-    if (error) { toast.error(error.message); return; }
+    if (error || !inserted) {
+      // We previously swallowed RLS / shape errors and only showed
+      // `error.message`. Some environments return a vague message when
+      // the post-insert SELECT fails its RLS check — log the full
+      // error so we can diagnose the "event was created but doesn't
+      // appear" class of bug quickly from the browser console.
+      console.error('[events] insert failed', error, 'payload:', eventPayload);
+      toast.error(error?.message || 'Could not create event');
+      return;
+    }
     toast.success('Event created!');
     setOpen(false);
     setForm({ title: '', description: '', date: '', time: '', location: '', max_attendees: '' });
-    fetch();
+    await fetch();
 
     // Fire-and-watch: send calendar invites to all approved residents.
     // We don't block the UI on this — failures are surfaced as a toast but the
@@ -172,6 +209,34 @@ export default function EventsPage() {
     fetch();
   }
 
+  // Optimistic pin/unpin: flip locally first so the row jumps to / from
+  // the top instantly, then reconcile with the server. Mirrors the
+  // /dashboard/announcements behaviour — keep them in lock-step.
+  async function handleTogglePin(ev: Event) {
+    const next = !ev.is_pinned;
+    setEvents((prev) => {
+      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+      return [...prev.map((x) => (x.id === ev.id ? { ...x, is_pinned: next } : x))].sort((a, b) => {
+        if (a.is_pinned !== b.is_pinned) return a.is_pinned ? -1 : 1;
+        const aPast = a.date < today;
+        const bPast = b.date < today;
+        if (aPast !== bPast) return aPast ? 1 : -1;
+        if (aPast) return b.date.localeCompare(a.date);
+        return a.date.localeCompare(b.date);
+      });
+    });
+    const { error } = await supabase
+      .from('events')
+      .update({ is_pinned: next })
+      .eq('id', ev.id);
+    if (error) {
+      toast.error(error.message || 'Could not update pin');
+      fetch();
+      return;
+    }
+    toast.success(next ? 'Pinned to top' : 'Unpinned');
+  }
+
   return (
     <div className="max-w-2xl mx-auto px-4 py-6">
       <div className="flex items-start justify-between gap-3 mb-5">
@@ -204,11 +269,17 @@ export default function EventsPage() {
             const userStatus = (userRsvp?.status ?? null) as RsvpStatus | null;
             const goingCount = rsvps.filter((r) => r.status === 'going').length;
             const maybeCount = rsvps.filter((r) => r.status === 'maybe').length;
-            const isPast = new Date(ev.date) < new Date();
+            // Compare the event's IST date to today's IST date as plain
+            // YYYY-MM-DD strings. The previous `new Date(ev.date) < new Date()`
+            // parsed ev.date as UTC midnight, which marked today's event as
+            // "Past" for any IST viewer past 5:30am.
+            const todayIst = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+            const isPast = ev.date < todayIst;
             return (
-              <div key={ev.id} className={`bg-white rounded-xl p-4 border border-gray-200 hover:shadow-sm transition-shadow ${isPast ? 'opacity-70' : ''}`}>
+              <div key={ev.id} className={`bg-white rounded-xl p-4 border border-gray-200 hover:shadow-sm transition-shadow ${ev.is_pinned ? 'border-l-4 border-l-yellow-400' : ''} ${isPast ? 'opacity-70' : ''}`}>
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex-1 min-w-0">
+                    {ev.is_pinned && <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-amber-600 mb-1"><Pin size={10} />Pinned</span>}
                     <div className="flex items-center gap-2 flex-wrap">
                       <h3 className="font-semibold text-gray-900">{ev.title}</h3>
                       {isPast && <span className="text-[10px] font-bold uppercase tracking-wider bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">Past</span>}
@@ -264,14 +335,30 @@ export default function EventsPage() {
                     )}
                   </div>
                   {isAdmin && (
-                    <button
-                      onClick={() => handleDelete(ev.id)}
-                      title={isPast ? 'Delete past event' : 'Delete event'}
-                      aria-label={`Delete ${ev.title}`}
-                      className="text-gray-300 hover:text-red-500 transition-colors"
-                    >
-                      <Trash2 size={16} />
-                    </button>
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => handleTogglePin(ev)}
+                        title={ev.is_pinned ? 'Unpin event' : 'Pin event to the top'}
+                        aria-label={ev.is_pinned ? `Unpin ${ev.title}` : `Pin ${ev.title}`}
+                        className={`transition-colors p-1 -m-1 ${
+                          ev.is_pinned
+                            ? 'text-amber-500 hover:text-amber-600'
+                            : 'text-gray-300 hover:text-amber-500'
+                        }`}
+                      >
+                        {ev.is_pinned ? <PinOff size={16} /> : <Pin size={16} />}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDelete(ev.id)}
+                        title={isPast ? 'Delete past event' : 'Delete event'}
+                        aria-label={`Delete ${ev.title}`}
+                        className="text-gray-300 hover:text-red-500 transition-colors p-1 -m-1"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
                   )}
                 </div>
               </div>
